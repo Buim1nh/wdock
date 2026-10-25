@@ -1,0 +1,67 @@
+# wdock configuration. Restart wdock after editing.
+
+[appearance]
+# "auto" follows Windows, or "dark" / "light".
+theme = "auto"
+# "acrylic" (blurred, translucent) or "solid".
+backdrop = "acrylic"
+
+[performance]
+# "software" renders on the CPU (WARP): ~10 MB, never wakes a discrete GPU.
+# "gpu" uses the default graphics adapter; its driver adds 30-60 MB per process.
+renderer = "software"
+
+[topbar]
+# Height in device-independent pixels (scaled by each monitor's DPI).
+height = 30
+# Show a top bar on "all" monitors or only the "primary" one.
+monitors = "all"
+# Windows date/time pictures: https://learn.microsoft.com/windows/win32/intl/day--month--year--and-era-format-pictures
+date_format = "ddd d MMM"
+time_format = "HH:mm"
+
+[tray]
+# Icons shown on the top bar; the rest go behind the chevron.
+max_visible = 12
+# Executable-name fragments that always go to the overflow, e.g. ["onedrive", "securityhealth"].
+overflow = []
+
+[dock]
+# 32 or 48 are sizes most apps ship icons at, so they look sharpest.
+icon_size = 32
+monitors = "primary"
+# Which windows a dock shows: "all" or only those on its own monitor ("this-monitor").
+windows = "all"
+# Hovered icons grow up to this factor; 1 turns magnification off.
+magnification = 2.0
+# "smart" slides the dock away while a window overlaps it (maximized apps
+# fill the screen), "on" always hides it until the pointer touches the
+# bottom edge, "off" keeps it up and keeps maximized windows above it.
+auto_hide = "smart"
+# Executable paths, URIs, or shell:AppsFolder\<AppUserModelID>.
+# Entries that cannot be resolved are skipped (see the log).
+# Pinning, unpinning or reordering from the dock saves the list to
+# %LOCALAPPDATA%\wdock\pinned.txt, which then wins; delete it to use this one.
+pinned = [
+    'shell:AppsFolder\Microsoft.Windows.Explorer',
+    'shell:AppsFolder\MSEdge',
+    'shell:AppsFolder\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App',
+    'shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel',
+]
+
+# Shortcuts (Windows keeps its own: Alt+Tab, Win+Tab, Win+Shift+S, ...):
+#   Win+Alt+Space or Ctrl+Alt+Space   launcher
+#   Alt+`  /  Alt+Shift+`             window switcher (release Alt to pick)
+#   Win+`                             overview of the current workspace
+#   Win+Ctrl+Alt+Left/Right, +1..9    switch workspace
+#   Win+Alt+Shift+Left/Right, +1..9   move the active window to a workspace
+#   Win+Alt+/                         show or hide a card listing these
+#   Ctrl+Alt+Shift+Q                  quit wdock (explorer's taskbar returns)
+
+[workspaces]
+# Workspaces per monitor (1-9).
+count = 4
+
+[switcher]
+# wdock's window switcher on Alt+` (windows of the visible workspaces only).
+enabled = true

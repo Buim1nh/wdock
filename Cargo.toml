@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/wdock"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+log = { version = "0.4", features = ["std"] }
+windows = "0.62"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
