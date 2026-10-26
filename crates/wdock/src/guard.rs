@@ -1,4 +1,4 @@
-//! `--guard`: started at sign-in by the HKCU Run key install.ps1 writes.
+//! `--guard`: started at sign-in by the scheduled task install.ps1 registers.
 //!
 //! It does almost nothing itself (no window, no COM, no graphics), so it is
 //! very unlikely to crash. It keeps a `--shell` child alive:
@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
 
 use crate::explorer;
+use crate::instance::SingleInstance;
 use crate::model::windows::restore_orphans;
 
 /// This many crashes within `CRASH_WINDOW` give up on wdock for the session.
@@ -31,6 +32,12 @@ fn session_ending() -> bool {
 }
 
 pub fn supervise() -> io::Result<()> {
+    // A second guard would start a shell that exits at once (one shell per
+    // session), take that as "quit on purpose" and bring the taskbar back.
+    let Some(_instance) = SingleInstance::acquire_guard()? else {
+        log::warn!("another wdock guard is already running; exiting");
+        return Ok(());
+    };
     let exe = std::env::current_exe()?;
     let mut crashes: VecDeque<Instant> = VecDeque::new();
     loop {

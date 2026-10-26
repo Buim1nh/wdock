@@ -5,8 +5,11 @@
 # What it does:
 #   1. builds the release binary (unless -NoBuild),
 #   2. copies it to %LOCALAPPDATA%\Programs\wdock\wdock.exe,
-#   3. adds HKCU\Software\Microsoft\Windows\CurrentVersion\Run\wdock =
-#      "<that exe>" --guard, and starts it now unless -NoStart.
+#   3. registers a per-user scheduled task "wdock" that runs "<that exe>" --guard
+#      at sign-in, and starts it now unless -NoStart.
+#
+# A task rather than the HKCU Run key: explorer can skip Run entries at
+# sign-in (seen after a Fast Startup boot), the task scheduler does not.
 #
 # Undo with scripts\uninstall.ps1. Ctrl+Alt+Shift+Q quits wdock for the
 # session and brings explorer's taskbar back.
@@ -33,7 +36,23 @@ if (Get-Process wdock -ErrorAction SilentlyContinue) {
 
 New-Item -ItemType Directory -Force $dir | Out-Null
 Copy-Item $built $exe -Force
-Set-ItemProperty -Path $run -Name wdock -Value "`"$exe`" --guard"
+$user = "$env:USERDOMAIN\$env:USERNAME"
+$task = @{
+    TaskName    = 'wdock'
+    Description = 'Starts wdock at sign-in'
+    Action      = New-ScheduledTaskAction -Execute $exe -Argument '--guard'
+    Trigger     = New-ScheduledTaskTrigger -AtLogOn -User $user
+    Principal   = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    Settings    = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+}
+Register-ScheduledTask @task -Force | Out-Null
+
+# Earlier installs used the Run key; two guards must not run.
+if ((Get-ItemProperty $run -ErrorAction SilentlyContinue).wdock) {
+    Remove-ItemProperty -Path $run -Name wdock
+    Write-Host 'Removed the old Run key entry.'
+}
 
 # Earlier builds replaced the shell itself; explorer must be the shell now.
 $shell = (Get-ItemProperty $winlogon -ErrorAction SilentlyContinue).Shell
@@ -42,8 +61,8 @@ if ($shell -and $shell -match 'wdock') {
     Write-Host "Removed the old per-user shell value ($shell)."
 }
 
-Write-Host "Installed $exe; it starts at every sign-in."
+Write-Host "Installed $exe; the 'wdock' scheduled task starts it at every sign-in."
 if (-not $NoStart) {
-    Start-Process -FilePath $exe -ArgumentList '--guard'
+    Start-ScheduledTask -TaskName wdock
     Write-Host 'wdock started.'
 }

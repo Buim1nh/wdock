@@ -65,7 +65,7 @@ Script này làm các việc sau:
 
 1. Build bản release.
 2. Copy file chạy vào `%LOCALAPPDATA%\Programs\wdock\wdock.exe`.
-3. Thêm `HKCU\...\Run\wdock = "<exe>" --guard` để wdock tự chạy mỗi lần đăng nhập.
+3. Tạo scheduled task tên `wdock` cho tài khoản của bạn, chạy `"<exe>" --guard` mỗi lần đăng nhập. Dùng task thay cho khóa registry `Run` vì explorer có thể bỏ qua các mục `Run` khi đăng nhập, ví dụ sau khi khởi động bằng Fast Startup.
 4. Khởi động wdock ngay.
 
 Các tùy chọn:
@@ -121,7 +121,7 @@ Gỡ cài đặt:
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 ```
 
-Script này gỡ mục tự chạy, dừng guard rồi dừng shell, sau đó trả lại taskbar của explorer và các cửa sổ đang ẩn ở workspace khác. Các tùy chọn:
+Script này gỡ scheduled task (và mục `Run` của các bản cài cũ), dừng guard rồi dừng shell, sau đó trả lại taskbar của explorer và các cửa sổ đang ẩn ở workspace khác. Các tùy chọn:
 
 - `-RemoveFiles`: xóa luôn file chạy.
 - `-RemoveData`: xóa log, cache và trạng thái.

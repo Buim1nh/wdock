@@ -1,5 +1,6 @@
 # Stops wdock, brings explorer's taskbar (and any windows hidden in other
-# workspaces) back, and removes the sign-in entry install.ps1 added.
+# workspaces) back, and removes the sign-in task install.ps1 registered
+# (and the Run key entry older installs used).
 # -RemoveFiles also deletes the installed binary; -RemoveData deletes logs,
 # caches and state in %LOCALAPPDATA%\wdock. Your config in %APPDATA%\wdock is
 # kept either way.
@@ -11,6 +12,10 @@ $exe = Join-Path $dir 'wdock.exe'
 $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $winlogon = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
 
+if (Get-ScheduledTask -TaskName wdock -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName wdock -Confirm:$false
+    Write-Host 'Removed the wdock sign-in task.'
+}
 if ((Get-ItemProperty $run -ErrorAction SilentlyContinue).wdock) {
     Remove-ItemProperty -Path $run -Name wdock
     Write-Host 'Removed wdock from sign-in startup.'
