@@ -8,8 +8,9 @@
 #   3. registers a per-user scheduled task "wdock" that runs "<that exe>" --guard
 #      at sign-in, and starts it now unless -NoStart.
 #
-# A task rather than the HKCU Run key: explorer can skip Run entries at
-# sign-in (seen after a Fast Startup boot), the task scheduler does not.
+# A task rather than the HKCU Run key: run from a packaged (MSIX) app's
+# terminal, registry writes to HKCU are redirected into the package and
+# explorer never sees the Run entry; task registration is not redirected.
 #
 # Undo with scripts\uninstall.ps1. Ctrl+Alt+Shift+Q quits wdock for the
 # session and brings explorer's taskbar back.

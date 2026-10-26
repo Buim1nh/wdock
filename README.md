@@ -67,7 +67,7 @@ The script:
 
 1. Builds the release binary.
 2. Copies it to `%LOCALAPPDATA%\Programs\wdock\wdock.exe`.
-3. Registers a per-user scheduled task named `wdock` that runs `"<exe>" --guard` at every sign-in. A task is used instead of the `Run` registry key because explorer can skip `Run` entries at sign-in, for example after a Fast Startup boot.
+3. Registers a per-user scheduled task named `wdock` that runs `"<exe>" --guard` at every sign-in. A task is used instead of the `Run` registry key because, when the script runs from a terminal inside a packaged (MSIX) app, Windows redirects its `HKCU` writes into that package and explorer never sees the `Run` entry.
 4. Starts wdock immediately.
 
 Options:

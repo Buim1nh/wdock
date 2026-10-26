@@ -65,7 +65,7 @@ Script này làm các việc sau:
 
 1. Build bản release.
 2. Copy file chạy vào `%LOCALAPPDATA%\Programs\wdock\wdock.exe`.
-3. Tạo scheduled task tên `wdock` cho tài khoản của bạn, chạy `"<exe>" --guard` mỗi lần đăng nhập. Dùng task thay cho khóa registry `Run` vì explorer có thể bỏ qua các mục `Run` khi đăng nhập, ví dụ sau khi khởi động bằng Fast Startup.
+3. Tạo scheduled task tên `wdock` cho tài khoản của bạn, chạy `"<exe>" --guard` mỗi lần đăng nhập. Dùng task thay cho khóa registry `Run` vì khi script chạy từ terminal bên trong một app dạng gói (MSIX), Windows chuyển hướng các thay đổi `HKCU` vào gói đó, nên explorer không thấy mục `Run`.
 4. Khởi động wdock ngay.
 
 Các tùy chọn:
