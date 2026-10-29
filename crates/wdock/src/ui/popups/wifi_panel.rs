@@ -50,6 +50,7 @@ pub struct WifiPanel {
     searching: bool,
     targets: Vec<(WifiHit, D2D_RECT_F)>,
     message_area: D2D_RECT_F,
+    header: D2D_RECT_F,
 }
 
 fn shorten(ssid: &str) -> String {
@@ -64,7 +65,7 @@ impl WifiPanel {
     /// still opens and says so.
     pub fn open(notify: HWND) -> Self {
         let session = Session::open(notify);
-        let mut panel = Self { session, networks: Vec::new(), radio: None, scroll: 0, searching: true, targets: Vec::new(), message_area: rect(0.0, 0.0, 0.0, 0.0) };
+        let mut panel = Self { session, networks: Vec::new(), radio: None, scroll: 0, searching: true, targets: Vec::new(), message_area: rect(0.0, 0.0, 0.0, 0.0), header: rect(0.0, 0.0, 0.0, 0.0) };
         panel.reload();
         panel
     }
@@ -106,6 +107,7 @@ impl WifiPanel {
         self.targets.clear();
         let mut y = top;
         let button = 24.0 * s;
+        self.header = rect(left + 12.0 * s, y, right, y + HEADER * s);
         if self.session.is_some() {
             let toggle = rect(right - 36.0 * s - 8.0 * s, y + (HEADER * s - 20.0 * s) / 2.0, right - 8.0 * s, y + (HEADER * s + 20.0 * s) / 2.0);
             let refresh = rect(toggle.left - 8.0 * s - button, y + (HEADER * s - button) / 2.0, toggle.left - 8.0 * s, y + (HEADER * s + button) / 2.0);
@@ -219,6 +221,8 @@ impl WifiPanel {
             }
         };
         let plate = |hit: WifiHit| if hot == Some(hit) { theme.hover } else { theme.control };
+
+        text::draw(cx, "Wi-Fi", &bold, self.header, theme.text);
 
         for &(hit, r) in &self.targets {
             match hit {

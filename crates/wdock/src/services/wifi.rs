@@ -9,7 +9,7 @@ use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE, HWND};
 use windows::Win32::NetworkManagement::WiFi::{
     L2_NOTIFICATION_DATA, WLAN_AVAILABLE_NETWORK_CONNECTED, WLAN_AVAILABLE_NETWORK_HAS_PROFILE,
     WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_PARAMETERS, WLAN_INTERFACE_INFO_LIST, WLAN_NOTIFICATION_SOURCE_ACM,
-    WLAN_NOTIFICATION_SOURCE_NONE, WLAN_PHY_RADIO_STATE, WlanCloseHandle, WlanConnect, WlanDisconnect, WlanEnumInterfaces,
+    WLAN_NOTIFICATION_SOURCE_MSM, WLAN_NOTIFICATION_SOURCE_NONE, WLAN_PHY_RADIO_STATE, WLAN_RADIO_STATE, WlanCloseHandle, WlanConnect, WlanDisconnect, WlanEnumInterfaces,
     WlanFreeMemory, WlanGetAvailableNetworkList, WlanOpenHandle, WlanQueryInterface, WlanRegisterNotification, WlanScan,
     WlanSetInterface, dot11_BSS_type_infrastructure, dot11_radio_state_off, dot11_radio_state_on,
     dot11_radio_state_unknown, wlan_connection_mode_profile, wlan_intf_opcode_radio_state,
@@ -99,7 +99,7 @@ impl Session {
                 return None;
             };
             let registered =
-                WlanRegisterNotification(handle, WLAN_NOTIFICATION_SOURCE_ACM, true, Some(callback), Some(notify.0 as *const c_void), None, None);
+                WlanRegisterNotification(handle, WLAN_NOTIFICATION_SOURCE_ACM | WLAN_NOTIFICATION_SOURCE_MSM, true, Some(callback), Some(notify.0 as *const c_void), None, None);
             if registered != ERROR_SUCCESS.0 {
                 log::warn!("wifi list: WlanRegisterNotification failed: {registered}");
             }
@@ -149,8 +149,11 @@ impl Session {
             if queried != ERROR_SUCCESS.0 || data.is_null() {
                 return None;
             }
-            let state = &*(data as *const WLAN_PHY_RADIO_STATE);
-            let on = state.dot11SoftwareRadioState == dot11_radio_state_on && state.dot11HardwareRadioState == dot11_radio_state_on;
+            let state = &*(data as *const WLAN_RADIO_STATE);
+            let count = (state.dwNumberOfPhys as usize).min(state.PhyRadioState.len());
+            let on = state.PhyRadioState[..count]
+                .iter()
+                .any(|p| p.dot11SoftwareRadioState == dot11_radio_state_on && p.dot11HardwareRadioState == dot11_radio_state_on);
             WlanFreeMemory(data);
             Some(on)
         }
