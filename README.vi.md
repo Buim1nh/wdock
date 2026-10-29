@@ -22,6 +22,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
 | ![Launcher](docs/media/launcher.png) | ![Bảng phím tắt](docs/media/shortcuts.png) |
 | Launcher (Win+Alt+Space) | Bảng phím tắt (Win+Alt+/) |
 | ![Lịch](docs/media/calendar.png) | ![Quick Settings](docs/media/quick-settings.png) |
+| ![Dynamic Island mở rộng](docs/media/island.png) | |
 | Lịch | Quick Settings: mạng, âm lượng, độ sáng, pin, nguồn |
 
 ## Tính năng
@@ -40,6 +41,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
   - Kéo thả để sắp xếp, có menu chuột phải.
   - Tự ẩn thông minh.
 - **Launcher:** tìm gần đúng (fuzzy) trong các app đã cài (Win32 và Store) và các trang Settings.
+- **Dynamic Island:** viên thuốc giữa đỉnh màn hình, rê chuột vào sẽ mở rộng: đang phát nhạc (mọi app có điều khiển media của Windows: ảnh bìa, phát/dừng, trước/sau, tua), đồng hồ Pomodoro và thông báo ngắn khi đổi âm lượng, độ sáng, sạc/pin, mạng, thiết bị âm thanh. Chạy theo sự kiện, ẩn khi có app toàn màn hình; `[island] enabled = false` để tắt hẳn.
 - **Quản lý cửa sổ:** switcher (Alt+\`), overview (Win+\`) và workspace ảo.
 - **Game mode:** khi một app toàn màn hình (game, F11 trên trình duyệt) ở phía trước, các thanh trên màn hình đó ngừng vẽ, ngừng chạy timer, và wdock cũng ngừng theo dõi việc di chuyển bên trong game.
 
@@ -100,7 +102,7 @@ Tất cả đều dùng `RegisterHotKey` với tổ hợp không trùng explorer
 - File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động từ mẫu có chú thích ở lần chạy đầu.
 - Lưu file dưới dạng UTF-8 không có BOM.
 - Thay đổi chỉ có hiệu lực sau khi khởi động lại wdock: bấm Ctrl+Alt+Shift+Q rồi chạy `wdock.exe --guard`, hoặc đăng xuất rồi đăng nhập lại.
-- Các mục: `[appearance]`, `[topbar]`, `[tray]`, `[dock]`, `[workspaces]`, `[switcher]`, `[performance]`.
+- Các mục: `[appearance]`, `[topbar]`, `[tray]`, `[dock]`, `[workspaces]`, `[switcher]`, `[island]`, `[performance]`.
 - Trong `[dock]`:
   - `icon_size` mặc định là 32.
   - `magnification` mặc định là 2.0.

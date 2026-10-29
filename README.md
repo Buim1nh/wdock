@@ -22,6 +22,7 @@ All screenshots are 1920×1080.
 | ![Launcher](docs/media/launcher.png) | ![Shortcut card](docs/media/shortcuts.png) |
 | Launcher (Win+Alt+Space) | Shortcut card (Win+Alt+/) |
 | ![Calendar](docs/media/calendar.png) | ![Quick settings](docs/media/quick-settings.png) |
+| ![Dynamic Island, expanded](docs/media/island.png) | |
 | Calendar | Quick settings: network, volume, brightness, battery, power |
 
 ## Features
@@ -40,6 +41,7 @@ All screenshots are 1920×1080.
   - Drag to reorder and a right-click menu.
   - Smart auto-hide.
 - **Launcher:** fuzzy search over installed apps (Win32 and Store) and Settings pages.
+- **Dynamic Island:** a pill at the top centre that expands on hover: now playing (any app with Windows media controls: cover, play/pause, previous/next, seek), a Pomodoro timer, and short notices for volume, brightness, charging/battery, network and audio-device changes. Event-driven, hidden under full-screen apps; `[island] enabled = false` removes it.
 - **Window management:** window switcher (Alt+\`), overview (Win+\`) and virtual workspaces.
 - **Game mode:** when a full-screen app (a game, or F11 in a browser) is in front, the bars on that monitor stop drawing and stop running timers. wdock also stops following window movement inside the game.
 
@@ -102,7 +104,7 @@ All shortcuts use `RegisterHotKey` with combinations explorer does not already u
 - The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a commented template on first run.
 - Save the file as UTF-8 without a BOM.
 - Changes apply after a restart: press Ctrl+Alt+Shift+Q, then run `wdock.exe --guard`, or sign out and back in.
-- Sections: `[appearance]`, `[topbar]`, `[tray]`, `[dock]`, `[workspaces]`, `[switcher]`, `[performance]`.
+- Sections: `[appearance]`, `[topbar]`, `[tray]`, `[dock]`, `[workspaces]`, `[switcher]`, `[island]`, `[performance]`.
 - In `[dock]`:
   - `icon_size` defaults to 32.
   - `magnification` defaults to 2.0.

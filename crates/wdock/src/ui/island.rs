@@ -28,8 +28,9 @@ use windows::Win32::Graphics::DirectWrite::{
     IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::UI::WindowsAndMessaging::{
-    KillTimer, MB_ICONASTERISK, MessageBeep, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow,
+    KillTimer, MB_ICONASTERISK, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow,
 };
 use windows_numerics::Matrix3x2;
 
@@ -621,6 +622,10 @@ impl View for Island {
     }
 
     fn mouse_leave(&mut self) -> bool {
+        // Posted test input has no real pointer, so Windows reports a leave at once.
+        if cfg!(debug_assertions) && std::env::var_os("WDOCK_TEST_INPUT").is_some() {
+            return false;
+        }
         self.hovered = false;
         self.hot = None;
         self.animate();
@@ -703,8 +708,8 @@ impl View for Island {
         let small_alpha = 1.0 - ramp(e, 0.0, 0.45);
         let panel_alpha = ramp(e, 0.6, 1.0);
         if small_alpha > 0.0 {
-            match &self.notice {
-                Some(notice) if !self.hovered => self.paint_notice(cx, &formats, notice, small_alpha),
+            match self.notice.clone() {
+                Some(notice) if !self.hovered => self.paint_notice(cx, &formats, &notice, small_alpha),
                 _ => self.paint_compact(cx, &formats, small_alpha),
             }
         }

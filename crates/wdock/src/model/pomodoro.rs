@@ -59,11 +59,6 @@ impl Pomodoro {
         }
     }
 
-    /// Elapsed share of the current phase, 0.0 ..= 1.0.
-    pub fn progress(&self, now: u64) -> f32 {
-        1.0 - self.remaining_ms(now) as f32 / self.length() as f32
-    }
-
     /// Starts an idle timer or resumes a paused one.
     pub fn start(&mut self, now: u64) {
         match self.run {
@@ -132,6 +127,12 @@ pub fn clock(ms: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
+/// Milliseconds until the compact pill's minute label changes.
+pub fn tick_delay(remaining_ms: u64) -> u32 {
+    let into_minute = remaining_ms % 60_000;
+    (if into_minute == 0 { 60_000 } else { into_minute } + 20) as u32
+}
+
 /// Whole minutes rounded up for the compact pill, e.g. `25m`.
 pub fn minutes(ms: u64) -> String {
     format!("{}m", ms.div_ceil(60_000))
@@ -189,18 +190,16 @@ mod tests {
     }
 
     #[test]
+    fn tick_delay_hits_minute_boundary() {
+        assert_eq!(tick_delay(25 * 60_000), 60_020);
+        assert_eq!(tick_delay(24 * 60_000 + 5_000), 5_020);
+    }
+
+    #[test]
     fn formats() {
         assert_eq!(clock(24 * 60_000 + 5_000), "24:05");
         assert_eq!(clock(59_001), "1:00");
         assert_eq!(minutes(59_000), "1m");
         assert_eq!(minutes(25 * 60_000), "25m");
-    }
-
-    #[test]
-    fn progress_runs_zero_to_one() {
-        let mut p = Pomodoro::new(1, 1);
-        assert_eq!(p.progress(0), 0.0);
-        p.start(0);
-        assert!((p.progress(30_000) - 0.5).abs() < 1e-6);
     }
 }

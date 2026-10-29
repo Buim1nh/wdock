@@ -32,10 +32,9 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{Interface, Ref, Result, RuntimeType};
-use windows_future::Async;
 
 /// The media snapshot changed; read it with `current()`.
-pub const WM_APP_MEDIA: u32 = WM_APP + 21;
+pub const WM_APP_MEDIA: u32 = WM_APP + 22;
 /// Album art is decoded to this square size (pixels), enough for the expanded island.
 const ART_PX: u32 = 112;
 /// Timeline events within this much of the extrapolated position are ignored.
