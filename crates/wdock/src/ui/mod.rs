@@ -3,6 +3,7 @@ pub mod bar;
 pub mod dock;
 pub mod gfx;
 pub mod glyphs;
+pub mod island;
 pub mod popup;
 pub mod popups;
 pub mod text;

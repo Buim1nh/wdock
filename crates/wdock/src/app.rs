@@ -46,11 +46,13 @@ use crate::platform::tray_host::{self, TrayEvent, TrayHost, WM_APP_TRAY};
 use crate::platform::winevents::{self, WM_APP_WINEVENTS};
 use crate::platform::wininfo;
 use crate::services::apps_index::{self, WM_APP_INDEX};
+use crate::services::media::{self, WM_APP_MEDIA};
 use crate::services::{self, WM_APP_STATUS};
 use crate::ui::backdrop::Corners;
 use crate::ui::bar::{self, BarSpec};
 use crate::ui::dock;
 use crate::ui::gfx::Gfx;
+use crate::ui::island;
 use crate::ui::popup::{self, PopupContext};
 use crate::ui::popups::shortcuts::Group;
 use crate::ui::theme::Theme;
@@ -80,6 +82,7 @@ const WM_APP_FULLSCREEN: u32 = WM_APP + 5;
 const TIMER_REBUILD: usize = 1;
 const TIMER_FOCUS: usize = 2;
 const TIMER_RECLAIM: usize = 3;
+const TIMER_POMODORO: usize = 4;
 /// Some apps (Steam) ignore a TaskbarCreated that arrives soon after another
 /// one, e.g. ours at start right after explorer's or a previous wdock's.
 /// One more broadcast a little later catches them; duplicate adds are refused.
@@ -122,6 +125,22 @@ pub fn toggle_shortcuts() {
 /// Re-evaluates game mode soon (from an AppBar notification).
 pub fn recheck_fullscreen() {
     post_main(WM_APP_FULLSCREEN);
+}
+
+/// Arms (or with `None` cancels) the one-shot timer for the Pomodoro phase end.
+pub fn schedule_pomodoro(delay_ms: Option<u32>) {
+    let hwnd = main_hwnd();
+    if hwnd.is_invalid() {
+        return;
+    }
+    match delay_ms {
+        Some(ms) => unsafe {
+            SetTimer(Some(hwnd), TIMER_POMODORO, ms, None);
+        },
+        None => unsafe {
+            let _ = KillTimer(Some(hwnd), TIMER_POMODORO);
+        },
+    }
 }
 
 /// Activates `hwnd` shortly, once an asynchronous show has completed.
@@ -171,6 +190,7 @@ fn with_shell(f: impl FnOnce(&mut Shell)) {
 impl Shell {
     fn rebuild(&mut self) {
         self.destroy_bars();
+        island::configure(&self.config.island);
         if std::mem::take(&mut self.pending_device_lost) {
             self.gfx = None;
         }
@@ -209,6 +229,12 @@ impl Shell {
                         appbar::register(hwnd, Edge::Top, RECT { bottom: m.top + height, ..m });
                     }
                     Err(err) => log::error!("failed to create top bar: {err}"),
+                }
+            }
+            if self.config.island.enabled && in_scope(self.config.topbar.monitors, monitor) {
+                match island::create(&gfx, &theme, &self.config.island, monitor) {
+                    Ok(hwnd) => self.bars.push((hwnd, monitor.handle)),
+                    Err(err) => log::error!("failed to create island: {err}"),
                 }
             }
             if in_scope(self.config.dock.monitors, monitor) {
@@ -430,6 +456,9 @@ pub fn run(mode: Mode) -> Result<()> {
     let tray = TrayHost::create(hwnd).inspect_err(|err| log::error!("tray host failed: {err}")).ok();
     services::start(hwnd);
     apps_index::start(hwnd);
+    if config.island.enabled {
+        media::start(hwnd);
+    }
     model.borrow_mut().scan();
 
     SHELL.with_borrow_mut(|shell| {
@@ -450,10 +479,12 @@ pub fn run(mode: Mode) -> Result<()> {
 
     popup::set_context(None);
     services::stop();
+    media::stop();
     apps_index::stop();
     SHELL.with_borrow_mut(|shell| {
         if let Some(mut shell) = shell.take() {
             shell.destroy_bars();
+            island::shutdown();
             shell.model.borrow_mut().show_all_hidden();
         }
     });
@@ -641,6 +672,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 }
             }
             with_shell(|shell| shell.notify_bars());
+            LRESULT(0)
+        }
+        WM_APP_MEDIA => {
+            island::media_changed();
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_POMODORO => {
+            let _ = unsafe { KillTimer(Some(hwnd), TIMER_POMODORO) };
+            island::pomodoro_due();
             LRESULT(0)
         }
         WM_APP_INDEX => {

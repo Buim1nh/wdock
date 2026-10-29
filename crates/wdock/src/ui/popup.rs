@@ -257,6 +257,10 @@ pub fn set_game_mode(on: bool) {
     }
 }
 
+pub fn game_mode() -> bool {
+    GAME_MODE.get()
+}
+
 pub fn show_balloon(balloon: Balloon) {
     hide_balloon();
     if GAME_MODE.get() {

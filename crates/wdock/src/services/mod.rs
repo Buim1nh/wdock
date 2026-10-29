@@ -7,6 +7,7 @@ pub mod apps_index;
 pub mod audio;
 pub mod brightness;
 pub mod icons;
+pub mod media;
 pub mod network;
 pub mod power;
 
@@ -54,6 +55,8 @@ pub struct SystemStatus {
     pub battery: Option<Battery>,
     /// `None` until known, or when the display has no software control.
     pub brightness: Option<u8>,
+    /// Counts default-output-device changes (headphones plugged in, ...).
+    pub audio_device: u32,
 }
 
 struct Services {
@@ -78,6 +81,7 @@ pub fn start(target: HWND) {
             network: network.state(),
             battery: power::battery(),
             brightness: None,
+            audio_device: 0,
         },
         audio,
         network,
@@ -111,6 +115,7 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
                     audio.attach_default();
                 }
                 s.status.volume = s.audio.as_ref().and_then(audio::Audio::state);
+                s.status.audio_device = s.status.audio_device.wrapping_add(1);
             }
             KIND_AUDIO => s.status.volume = s.audio.as_ref().and_then(audio::Audio::state),
             KIND_NETWORK => s.status.network = s.network.state(),
