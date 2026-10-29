@@ -207,11 +207,7 @@ pub fn is_fullscreen(hwnd: HWND) -> bool {
     let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-        // Maximized windows of apps that draw their own frame (Chromium,
-        // Electron) have no caption and cover the monitor too, but are not
-        // full screen.
-        let zoomed = windows::Win32::UI::WindowsAndMessaging::IsZoomed(hwnd).as_bool();
-        if !exists(hwnd) || style & WS_CAPTION.0 == WS_CAPTION.0 || is_minimized(hwnd) || zoomed {
+        if !exists(hwnd) || style & WS_CAPTION.0 == WS_CAPTION.0 || is_minimized(hwnd) {
             return false;
         }
         if !GetMonitorInfoW(monitor(hwnd), &mut info).as_bool() {
@@ -220,7 +216,14 @@ pub fn is_fullscreen(hwnd: HWND) -> bool {
     }
     let r = rect(hwnd);
     let m = info.rcMonitor;
-    r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
+    let covers = r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom;
+    // Maximized windows of apps that draw their own frame (Chromium,
+    // Electron) have no caption and can cover the monitor while overhanging
+    // it by their invisible borders; they are not full screen. A maximized
+    // window that fits the monitor exactly is: Chromium keeps the maximized
+    // state for full-screen video, and borderless games maximize themselves.
+    let zoomed = unsafe { windows::Win32::UI::WindowsAndMessaging::IsZoomed(hwnd).as_bool() };
+    covers && (!zoomed || r == m)
 }
 
 /// The foreground app covers its monitor: a game or full-screen video, not
