@@ -77,3 +77,6 @@ pomodoro_break = 5
 # Briefly expand when volume, brightness, charging, battery, network or the
 # audio device change. Windows' own pop-ups are left alone.
 notices = true
+# Animate the equalizer next to what is playing. It redraws the island several
+# times a second while anything plays, so it is off (still bars) by default.
+animate_equalizer = false

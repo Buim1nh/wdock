@@ -377,6 +377,7 @@ pub struct Island {
     hovered: bool,
     suspended: bool,
     notices: bool,
+    animate_eq: bool,
     media: Option<Media>,
     pomodoro: Pomodoro,
     status: SystemStatus,
@@ -402,6 +403,7 @@ pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &IslandConfig, monitor: 
         hovered: false,
         suspended: false,
         notices: config.notices,
+        animate_eq: config.animate_equalizer,
         media: media::current(),
         pomodoro: pomodoro_state(),
         status: services::status(),
@@ -475,7 +477,11 @@ impl Island {
 
     /// Whether the equalizer should be moving.
     fn wants_eq(&self) -> bool {
-        !self.suspended && !self.hovered && self.notice.is_none() && self.media.as_ref().is_some_and(|m| m.playing)
+        self.animate_eq
+            && !self.suspended
+            && !self.hovered
+            && self.notice.is_none()
+            && self.media.as_ref().is_some_and(|m| m.playing)
     }
 
     /// Arms the one-shot ticks the current state needs (progress, countdown,
@@ -920,7 +926,12 @@ impl Island {
         if matches!(content, Content::Media { .. }) {
             // Equalizer: four bars, still when paused.
             let playing = self.media.as_ref().is_some_and(|m| m.playing);
-            let heights = if playing { equalizer(self.eq_step) } else { [0.25; 4] };
+            let heights = match (playing, self.animate_eq) {
+                (true, true) => equalizer(self.eq_step),
+                // Still but clearly "playing": staggered bars, bright.
+                (true, false) => [0.55, 0.95, 0.4, 0.75],
+                (false, _) => [0.25; 4],
+            };
             let (bar_w, gap, max_h) = (2.5 * s, 2.0 * s, 12.0 * s);
             let total = 4.0 * bar_w + 3.0 * gap;
             let x0 = if matches!(content, Content::Media { timer: true }) { left + 4.0 * s } else { right - total };
