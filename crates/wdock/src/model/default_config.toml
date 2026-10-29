@@ -65,3 +65,15 @@ count = 4
 [switcher]
 # wdock's window switcher on Alt+` (windows of the visible workspaces only).
 enabled = true
+
+[island]
+# A Dynamic Island-style pill at the top centre of every monitor: now playing
+# (any app that shows Windows' media controls), a Pomodoro timer and short
+# notices. Hover to expand. false removes the window and the media subscription.
+enabled = true
+# Pomodoro lengths in minutes.
+pomodoro_work = 25
+pomodoro_break = 5
+# Briefly expand when volume, brightness, charging, battery, network or the
+# audio device change. Windows' own pop-ups are left alone.
+notices = true

@@ -9,11 +9,15 @@ license.workspace = true
 log.workspace = true
 serde = { version = "1", features = ["derive"] }
 windows-core = "0.62"
+windows-future = "0.3"
 toml = { version = "1", default-features = false, features = ["parse", "serde"] }
 
 [dependencies.windows]
 workspace = true
 features = [
+    "Foundation",
+    "Media_Control",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Graphics_Direct2D",

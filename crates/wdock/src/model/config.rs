@@ -19,6 +19,7 @@ pub struct Config {
     pub dock: DockConfig,
     pub workspaces: WorkspacesConfig,
     pub switcher: SwitcherConfig,
+    pub island: IslandConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -112,6 +113,18 @@ pub struct SwitcherConfig {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct IslandConfig {
+    pub enabled: bool,
+    /// Pomodoro focus length, minutes.
+    pub pomodoro_work: u32,
+    /// Pomodoro break length, minutes.
+    pub pomodoro_break: u32,
+    /// Briefly expand for volume, brightness, power, network and audio-device changes.
+    pub notices: bool,
+}
+
 // Defaults are spelled out here rather than parsed from the template: serde's
 // container-level `default` calls `Default::default()` eagerly, so parsing the
 // template inside it would recurse. A test keeps the two in sync.
@@ -181,6 +194,12 @@ impl Default for WorkspacesConfig {
 impl Default for SwitcherConfig {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+impl Default for IslandConfig {
+    fn default() -> Self {
+        Self { enabled: true, pomodoro_work: 25, pomodoro_break: 5, notices: true }
     }
 }
 
