@@ -33,6 +33,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
   - Tiêu đề cửa sổ đang mở.
   - Khay hệ thống do wdock tự giữ.
   - Biểu tượng âm lượng, mạng, pin; bấm vào để mở Quick Settings.
+  - Quick Settings liệt kê các thiết bị phát âm thanh đang hoạt động cạnh thanh Sound (loa, tai nghe, HDMI, Bluetooth); bấm để đặt làm mặc định cho mọi vai trò. Dùng giao diện COM không tài liệu `IPolicyConfig`, nếu Windows từ chối thì mở trang cài đặt Sound.
   - Đồng hồ; bấm vào để mở lịch.
 - **Dock:**
   - App ghim và app đang chạy, có chấm báo app đang chạy.

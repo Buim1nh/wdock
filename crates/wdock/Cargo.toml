@@ -19,6 +19,7 @@ features = [
     "Foundation",
     "Media_Control",
     "Storage_Streams",
+    "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Graphics_Direct2D",

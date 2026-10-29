@@ -27,3 +27,11 @@ pub fn volume(level: f32, muted: bool) -> &'static str {
         _ => VOLUME_LEVELS[3],
     }
 }
+
+pub const SPEAKER: &str = "\u{E767}";
+pub const HEADPHONES: &str = "\u{E7F6}";
+pub const BLUETOOTH: &str = "\u{E702}";
+pub const DISPLAY: &str = "\u{E7F4}";
+pub const CHEVRON_DOWN: &str = "\u{E70D}";
+pub const CHEVRON_UP: &str = "\u{E70E}";
+pub const CHECK: &str = "\u{E73E}";

@@ -13,6 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 use crate::model::config::Backdrop;
 use crate::platform::launch;
 use crate::platform::session::{self, SessionAction};
+use crate::services::audio::{Output, OutputKind};
 use crate::services::{self, NetState, SystemStatus};
 use crate::ui::backdrop::DWM_CORNER_RADIUS;
 use crate::ui::bar::{self, Button, PaintCx, View};
@@ -28,6 +29,7 @@ const SLIDER_ROW: f32 = 32.0;
 const ICON_BUTTON: f32 = 30.0;
 const POWER_BUTTON: f32 = 38.0;
 const INFO_LINE: f32 = 22.0;
+const OUTPUT_ROW: f32 = 30.0;
 const GAP: f32 = 10.0;
 const TIMER_CONFIRM: usize = 1;
 const CONFIRM_MS: u32 = 3000;
@@ -37,6 +39,8 @@ enum Hit {
     Network,
     Mute,
     Volume,
+    OutputToggle,
+    Output(usize),
     Brightness,
     Battery,
     Session(SessionAction),
@@ -69,6 +73,8 @@ pub struct QuickSettingsView {
     hot: Option<Hit>,
     drag: Option<Drag>,
     confirm: Option<SessionAction>,
+    outputs: Vec<Output>,
+    outputs_open: bool,
 }
 
 impl QuickSettingsView {
@@ -84,6 +90,8 @@ impl QuickSettingsView {
             hot: None,
             drag: None,
             confirm: None,
+            outputs: services::audio_outputs(),
+            outputs_open: false,
         };
         view.layout();
         view
@@ -104,6 +112,7 @@ impl QuickSettingsView {
             let button = rect(left, *y + (SLIDER_ROW - ICON_BUTTON) / 2.0 * s, left + ICON_BUTTON * s, *y + (SLIDER_ROW + ICON_BUTTON) / 2.0 * s);
             if hit == Hit::Volume {
                 targets.push((Hit::Mute, button));
+                targets.push((Hit::OutputToggle, rect(left + 70.0 * s, *y - LABEL * s, right, *y)));
             }
             let track = rect(button.right + 10.0 * s, *y, right - 40.0 * s, *y + SLIDER_ROW * s);
             targets.push((hit, track));
@@ -112,6 +121,13 @@ impl QuickSettingsView {
         };
         if self.status.volume.is_some() {
             slider(Hit::Volume, &mut y, &mut self.targets, &mut self.tracks);
+            if self.outputs_open {
+                for i in 0..self.outputs.len() {
+                    self.targets.push((Hit::Output(i), rect(left, y, right, y + OUTPUT_ROW * s)));
+                    y += OUTPUT_ROW * s;
+                }
+                y += GAP * s;
+            }
         }
         if self.status.brightness.is_some() {
             slider(Hit::Brightness, &mut y, &mut self.targets, &mut self.tracks);
@@ -198,6 +214,9 @@ impl View for QuickSettingsView {
         if status == self.status {
             return false;
         }
+        if status.audio_devices != self.status.audio_devices {
+            self.outputs = services::audio_outputs();
+        }
         self.status = status;
         self.layout();
         true
@@ -251,6 +270,34 @@ impl View for QuickSettingsView {
                     fill(r, 15.0 * s, plate_color(hit));
                     let level = self.slider_value(Hit::Volume);
                     text::draw(cx, glyphs::volume(level, muted), &icon, r, theme.text);
+                }
+                Hit::OutputToggle => {
+                    if let Some(current) = self.outputs.iter().find(|o| o.default) {
+                        let color = if self.hot == Some(hit) { theme.text } else { theme.text_dim };
+                        text::draw(cx, &current.name, &right_aligned, rect(r.left, r.top, r.right - 22.0 * s, r.bottom), color);
+                        let chevron = if self.outputs_open { glyphs::CHEVRON_UP } else { glyphs::CHEVRON_DOWN };
+                        text::draw(cx, chevron, &icon, rect(r.right - 20.0 * s, r.top, r.right, r.bottom), color);
+                    }
+                }
+                Hit::Output(i) => {
+                    let Some(output) = self.outputs.get(i) else {
+                        continue;
+                    };
+                    if self.hot == Some(hit) {
+                        fill(r, 8.0 * s, theme.hover);
+                    }
+                    let glyph = match output.kind {
+                        OutputKind::Headphones => glyphs::HEADPHONES,
+                        OutputKind::Bluetooth => glyphs::BLUETOOTH,
+                        OutputKind::Display => glyphs::DISPLAY,
+                        OutputKind::Speakers | OutputKind::Other => glyphs::SPEAKER,
+                    };
+                    text::draw(cx, glyph, &icon, rect(r.left, r.top, r.left + 30.0 * s, r.bottom), theme.text);
+                    let name_color = if output.default { theme.accent } else { theme.text };
+                    text::draw(cx, &output.name, &normal, rect(r.left + 36.0 * s, r.top, r.right - 26.0 * s, r.bottom), name_color);
+                    if output.default {
+                        text::draw(cx, glyphs::CHECK, &icon, rect(r.right - 26.0 * s, r.top, r.right, r.bottom), theme.accent);
+                    }
                 }
                 Hit::Volume | Hit::Brightness => {
                     let label = if hit == Hit::Volume { "Sound" } else { "Display" };
@@ -340,6 +387,18 @@ impl View for QuickSettingsView {
                 let page = if matches!(self.status.network, NetState::Wifi { .. }) { "ms-settings:network-wifi" } else { "ms-settings:network" };
                 launch::open(page);
                 self.close();
+            }
+            Some(Hit::OutputToggle) => {
+                self.outputs = services::audio_outputs();
+                self.outputs_open = !self.outputs_open;
+                self.layout();
+            }
+            Some(Hit::Output(i)) => {
+                if let Some(output) = self.outputs.get(i).filter(|o| !o.default) {
+                    services::set_default_output(&output.id);
+                }
+                self.outputs_open = false;
+                self.layout();
             }
             Some(Hit::Mute) => {
                 services::set_muted(!self.status.volume.is_some_and(|v| v.muted));

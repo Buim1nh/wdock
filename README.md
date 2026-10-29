@@ -33,6 +33,7 @@ All screenshots are 1920×1080.
   - Title of the active window.
   - System tray hosted by wdock itself.
   - Volume, network and battery indicators that open quick settings.
+  - Quick settings lists the active audio outputs next to the Sound slider (speakers, headphones, HDMI, Bluetooth); click one to make it the default for all roles. Uses the undocumented `IPolicyConfig` COM interface and falls back to the Sound settings page if Windows refuses.
   - Clock that opens a calendar.
 - **Dock:**
   - Pinned and running apps with running-indicator dots.
