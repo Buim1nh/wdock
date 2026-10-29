@@ -212,6 +212,8 @@ fn work(tx: &Sender<Event>, rx: &Receiver<Event>) -> Result<()> {
     let mut subscribed: Option<Subscribed> = None;
     let mut last: Option<Media> = None;
     let mut cache = ArtCache::default();
+    // Something may already be playing: events only report later changes.
+    let _ = tx.send(Event::Refresh);
 
     while let Ok(event) = rx.recv() {
         let mut quit = false;
@@ -251,7 +253,11 @@ fn work(tx: &Sender<Event>, rx: &Receiver<Event>) -> Result<()> {
         if subscribed.as_ref().map(|s| &s.session) != session.as_ref() {
             subscribed = None;
             if let Some(session) = session {
+                let app = session.SourceAppUserModelId().map(|id| id.to_string()).unwrap_or_default();
+                log::info!("media session: {app}");
                 subscribed = Subscribed::new(session, tx).inspect_err(|err| log::warn!("media events: {err}")).ok();
+            } else {
+                log::info!("no media session");
             }
         }
         let media = subscribed.as_ref().and_then(|s| {
