@@ -72,6 +72,7 @@ Các tùy chọn:
 
 - `-NoBuild`: dùng bản `target\release` đã có.
 - `-NoStart`: chỉ cài, không khởi động.
+- `-WithUsage`: cài thêm [agent-usage-bar](https://github.com/Buim1nh/agent-usage-bar), ứng dụng khay tùy chọn hiển thị hạn mức sử dụng của Claude, Codex và Antigravity (kèm biểu đồ đóng góp GitHub) trên thanh trên của wdock. Script dùng thư mục `agent-usage-bar` nằm cạnh repo này, tự clone nếu chưa có (`-UsageRepo <đường dẫn>` để chọn chỗ khác), và ứng dụng tự chạy khi đăng nhập bằng scheduled task riêng. Đây là chương trình tách riêng để bản thân wdock vẫn không giữ thông tin đăng nhập và không gọi mạng. Mặc định tắt.
 
 Cần thoát wdock trước khi cài đè.
 

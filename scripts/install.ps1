@@ -12,9 +12,15 @@
 # terminal, registry writes to HKCU are redirected into the package and
 # explorer never sees the Run entry; task registration is not redirected.
 #
+# -WithUsage also installs agent-usage-bar (github.com/Buim1nh/agent-usage-bar),
+# an optional tray app showing AI coding-agent usage limits that wdock's top
+# bar hosts like any tray icon. It uses -UsageRepo (default: a sibling
+# "agent-usage-bar" folder, cloned there if missing) and that repo's own
+# install script; remove it with that repo's scripts\uninstall.ps1.
+#
 # Undo with scripts\uninstall.ps1. Ctrl+Alt+Shift+Q quits wdock for the
 # session and brings explorer's taskbar back.
-param([switch]$NoBuild, [switch]$NoStart)
+param([switch]$NoBuild, [switch]$NoStart, [switch]$WithUsage, [string]$UsageRepo)
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -66,4 +72,16 @@ Write-Host "Installed $exe; the 'wdock' scheduled task starts it at every sign-i
 if (-not $NoStart) {
     Start-ScheduledTask -TaskName wdock
     Write-Host 'wdock started.'
+}
+
+if ($WithUsage) {
+    if (-not $UsageRepo) { $UsageRepo = Join-Path (Split-Path -Parent $root) 'agent-usage-bar' }
+    if (-not (Test-Path (Join-Path $UsageRepo 'scripts\install.ps1'))) {
+        git clone https://github.com/Buim1nh/agent-usage-bar $UsageRepo
+        if ($LASTEXITCODE -ne 0) { throw 'cloning agent-usage-bar failed' }
+    }
+    $usageArgs = @{}
+    if ($NoBuild) { $usageArgs.NoBuild = $true }
+    if ($NoStart) { $usageArgs.NoStart = $true }
+    & (Join-Path $UsageRepo 'scripts\install.ps1') @usageArgs
 }

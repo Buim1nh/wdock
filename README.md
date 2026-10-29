@@ -74,6 +74,7 @@ Options:
 
 - `-NoBuild` uses the existing `target\release` build.
 - `-NoStart` installs without starting wdock.
+- `-WithUsage` also installs [agent-usage-bar](https://github.com/Buim1nh/agent-usage-bar), an optional tray app that shows Claude, Codex and Antigravity usage limits (and a GitHub contribution graph) on wdock's top bar. It uses the `agent-usage-bar` folder next to this repo, cloning it there if missing (`-UsageRepo <path>` picks another), and starts at sign-in from its own scheduled task. It is a separate program so that wdock itself still holds no credentials and makes no network calls. Off by default.
 
 Quit wdock before installing over a running copy.
 
