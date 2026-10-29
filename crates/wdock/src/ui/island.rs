@@ -44,8 +44,10 @@ use crate::ui::backdrop::Corners;
 use crate::ui::bar::{self, BarSpec, Button, PaintCx, View};
 use crate::ui::gfx::{Gfx, rect, rgba, rounded};
 use crate::ui::popup;
+use crate::platform::wininfo;
 use crate::ui::text;
 use crate::ui::theme::Theme;
+use crate::ui::thumbs::Thumbnail;
 
 use std::rc::Rc;
 use windows::core::Result;
@@ -380,6 +382,9 @@ pub struct Island {
     status: SystemStatus,
     notice: Option<Notice>,
     art: Option<(u64, ID2D1Bitmap1)>,
+    /// Live preview of the playing window, shown in the cover's place while
+    /// expanded when the source set no cover; keyed by the track title.
+    thumb: Option<(String, Option<Thumbnail>)>,
     eq_step: u32,
     eq_running: bool,
     formats: Option<Formats>,
@@ -402,6 +407,7 @@ pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &IslandConfig, monitor: 
         status: services::status(),
         notice: None,
         art: None,
+        thumb: None,
         eq_step: 0,
         eq_running: false,
         formats: None,
@@ -562,6 +568,7 @@ impl View for Island {
                 self.eq_running = false;
                 self.notice = None;
                 self.hovered = false;
+                self.thumb = None;
                 let _ = ShowWindow(self.hwnd, SW_HIDE);
             } else {
                 // State moved on while hidden.
@@ -716,8 +723,41 @@ impl View for Island {
         if panel_alpha > 0.0 {
             self.paint_panel(cx, &formats, panel_alpha);
         }
+        self.sync_thumbnail(panel_alpha);
         self.formats = Some(formats);
     }
+}
+
+/// The visible, unminimized top-level window whose title contains the track
+/// title (browsers title their window after the playing tab), topmost first.
+fn playing_window(title: &str) -> Option<HWND> {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
+    use windows::core::BOOL;
+    struct Search {
+        needle: String,
+        own: u32,
+        found: Option<HWND>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let search = unsafe { &mut *(lparam.0 as *mut Search) };
+        if wininfo::is_visible(hwnd)
+            && !wininfo::is_minimized(hwnd)
+            && wininfo::process_id(hwnd) != search.own
+            && wininfo::title(hwnd).to_lowercase().contains(&search.needle)
+        {
+            search.found = Some(hwnd);
+            return false.into();
+        }
+        true.into()
+    }
+    let mut search = Search {
+        needle: title.to_lowercase(),
+        own: unsafe { windows::Win32::System::Threading::GetCurrentProcessId() },
+        found: None,
+    };
+    let _ = unsafe { EnumWindows(Some(each), LPARAM(&mut search as *mut Search as isize)) };
+    search.found
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -797,9 +837,31 @@ impl Island {
         }
     }
 
-    /// The cover in `dest` with rounded corners, or a music note on a dim tile.
+    /// The cover in `dest` with rounded corners, the playing app's icon on a
+    /// dim tile, or a music note on one.
     fn paint_art(&mut self, cx: &PaintCx, formats: &Formats, dest: D2D_RECT_F, radius: f32, alpha: f32) {
         let bitmap = self.art_bitmap(cx);
+        let is_icon = self.media.as_ref().is_some_and(|m| m.art_is_icon);
+        if let (Some(bitmap), true) = (&bitmap, is_icon) {
+            if let Ok(brush) = cx.gfx.brush(with_alpha(CONTROL, alpha)) {
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(dest, radius), &brush) };
+            }
+            // Inset, drawn as a picture rather than filling the tile.
+            let side = (dest.right - dest.left) * 0.62;
+            let left = ((dest.left + dest.right - side) / 2.0).round();
+            let top = ((dest.top + dest.bottom - side) / 2.0).round();
+            unsafe {
+                cx.dc.DrawBitmap(
+                    bitmap,
+                    Some(&rect(left, top, left + side, top + side)),
+                    alpha,
+                    windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+                    None,
+                    None,
+                )
+            };
+            return;
+        }
         if let Some(bitmap) = bitmap {
             let size = unsafe { bitmap.GetPixelSize() }.width as f32;
             let scale = (dest.right - dest.left) / size;
@@ -816,6 +878,28 @@ impl Island {
             unsafe { cx.dc.FillRoundedRectangle(&rounded(dest, radius), &brush) };
         }
         text::draw(cx, GLYPH_MUSIC, &formats.icon_small, dest, with_alpha(DIM, alpha));
+    }
+
+    /// Shows the playing window live over the cover tile while the panel is
+    /// up and the source set no cover of its own. DWM composes it, so it
+    /// costs wdock nothing per frame; it is dropped as soon as the panel goes.
+    fn sync_thumbnail(&mut self, panel_alpha: f32) {
+        let wanted = self.media.as_ref().filter(|m| m.art_is_icon && !m.title.is_empty() && panel_alpha > 0.0);
+        let Some(media) = wanted else {
+            self.thumb = None;
+            return;
+        };
+        if self.thumb.as_ref().is_none_or(|(title, _)| *title != media.title) {
+            let source = playing_window(&media.title);
+            let thumb = source.and_then(|source| Thumbnail::register(self.hwnd, source));
+            self.thumb = Some((media.title.clone(), thumb));
+        }
+        if let Some((_, Some(thumb))) = &self.thumb {
+            let opacity = (panel_alpha.clamp(0.0, 1.0) * 255.0) as u8;
+            if thumb.place(self.panel.art, opacity).is_none() {
+                thumb.hide();
+            }
+        }
     }
 
     fn paint_compact(&mut self, cx: &PaintCx, formats: &Formats, alpha: f32) {

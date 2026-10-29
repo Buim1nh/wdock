@@ -63,6 +63,8 @@ pub struct Media {
     /// Changes whenever the cover does.
     pub art_id: u64,
     pub art: Option<Arc<Art>>,
+    /// `art` is the playing app's icon, not a cover (the source set none).
+    pub art_is_icon: bool,
 }
 
 impl Media {
@@ -196,6 +198,7 @@ struct ArtCache {
     key: String,
     id: u64,
     art: Option<Arc<Art>>,
+    is_icon: bool,
 }
 
 fn work(tx: &Sender<Event>, rx: &Receiver<Event>) -> Result<()> {
@@ -319,9 +322,10 @@ fn snapshot(session: &Session, wic: Option<&IWICImagingFactory>, cache: &mut Art
     let title = props.Title()?.to_string();
     let artist = props.Artist()?.to_string();
     let album = props.AlbumTitle()?.to_string();
+    let app_id = session.SourceAppUserModelId().map(|id| id.to_string()).unwrap_or_default();
 
     // Fetch the cover only when the track changed.
-    let key = format!("{title}\n{artist}\n{album}");
+    let key = format!("{app_id}\n{title}\n{artist}\n{album}");
     if cache.key != key {
         cache.key = key;
         cache.id += 1;
@@ -330,6 +334,16 @@ fn snapshot(session: &Session, wic: Option<&IWICImagingFactory>, cache: &mut Art
             .ok()
             .and_then(|thumb| read_art(&thumb, wic?).inspect_err(|err| log::debug!("album art: {err}")).ok())
             .map(Arc::new);
+        // Web pages often set no artwork (Edge passes on only what the page
+        // declares); show which app is playing instead.
+        cache.is_icon = false;
+        if cache.art.is_none()
+            && let Some(wic) = wic
+            && !app_id.is_empty()
+        {
+            cache.art = app_icon(wic, &app_id).inspect_err(|err| log::debug!("app icon for {app_id}: {err}")).ok().map(Arc::new);
+            cache.is_icon = cache.art.is_some();
+        }
     }
 
     let info = session.GetPlaybackInfo()?;
@@ -349,7 +363,16 @@ fn snapshot(session: &Session, wic: Option<&IWICImagingFactory>, cache: &mut Art
         taken: Instant::now(),
         art_id: cache.id,
         art: cache.art.clone(),
+        art_is_icon: cache.is_icon,
     })
+}
+
+/// The icon of the app with this AppUserModelID, as the shell shows it.
+fn app_icon(wic: &IWICImagingFactory, app_id: &str) -> Result<Art> {
+    let icon = crate::services::icons::load(wic, &format!("shell:AppsFolder\\{app_id}"), ART_PX)?;
+    let mut pixels = vec![0u8; (ART_PX * ART_PX * 4) as usize];
+    unsafe { icon.image.CopyPixels(std::ptr::null(), ART_PX * 4, &mut pixels)? };
+    Ok(Art { size: ART_PX, pixels })
 }
 
 fn read_art(thumbnail: &IRandomAccessStreamReference, wic: &IWICImagingFactory) -> Result<Art> {
