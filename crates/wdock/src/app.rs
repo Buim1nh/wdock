@@ -83,6 +83,9 @@ const TIMER_REBUILD: usize = 1;
 const TIMER_FOCUS: usize = 2;
 const TIMER_RECLAIM: usize = 3;
 const TIMER_POMODORO: usize = 4;
+const TIMER_APPBAR: usize = 5;
+/// Explorer applies a reservation asynchronously; check it this long after.
+const APPBAR_CHECK_MS: u32 = 1500;
 /// Some apps (Steam) ignore a TaskbarCreated that arrives soon after another
 /// one, e.g. ours at start right after explorer's or a previous wdock's.
 /// One more broadcast a little later catches them; duplicate adds are refused.
@@ -120,6 +123,11 @@ pub fn notify_model() {
 /// Shows or hides the shortcut card, as Win+Alt+/ does (top bar button).
 pub fn toggle_shortcuts() {
     let _ = unsafe { PostMessageW(Some(main_hwnd()), WM_HOTKEY, WPARAM(HOTKEY_SHORTCUTS as usize), LPARAM(0)) };
+}
+
+/// Checks the bars' reserved strips shortly (explorer applies them asynchronously).
+fn check_appbars_later() {
+    unsafe { SetTimer(Some(main_hwnd()), TIMER_APPBAR, APPBAR_CHECK_MS, None) };
 }
 
 /// Re-evaluates game mode soon (from an AppBar notification).
@@ -254,6 +262,7 @@ impl Shell {
         // New bars start visible; hide them again if a game is still in front.
         self.fullscreen = None;
         self.update_fullscreen();
+        check_appbars_later();
     }
 
     /// Game mode: while a full-screen app is in front, the bars on its monitor
@@ -282,6 +291,10 @@ impl Shell {
         }
         self.fullscreen = monitor;
         popup::set_game_mode(monitor.is_some());
+        if monitor.is_none() {
+            // Explorer gives the strip back once the full-screen app is gone.
+            check_appbars_later();
+        }
     }
 
     fn create_topbar(&self, gfx: &Rc<Gfx>, theme: &Rc<Theme>, monitor: &Monitor) -> Result<HWND> {
@@ -726,6 +739,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
         WM_APP_FULLSCREEN => {
             with_shell(Shell::update_fullscreen);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_APPBAR => {
+            let _ = unsafe { KillTimer(Some(hwnd), TIMER_APPBAR) };
+            // Explorer drops reservations for full-screen apps on purpose.
+            let mut idle = false;
+            with_shell(|shell| idle = shell.fullscreen.is_none());
+            if idle && appbar::verify() {
+                check_appbars_later();
+            }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_RECLAIM => {
