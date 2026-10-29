@@ -10,3 +10,4 @@ pub mod shortcuts;
 pub mod switcher;
 pub mod tiles;
 pub mod tooltip;
+pub mod wifi_panel;

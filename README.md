@@ -33,6 +33,7 @@ All screenshots are 1920×1080.
   - Title of the active window.
   - System tray hosted by wdock itself.
   - Volume, network and battery indicators that open quick settings.
+  - Wi-Fi list in quick settings: expand the network row to see visible networks (signal, lock, current one marked), refresh, connect to saved networks, disconnect, and switch Wi-Fi off/on. Networks without a saved profile open Windows' own Wi-Fi settings, so wdock never asks for a password. Scans only while the list is open.
   - Clock that opens a calendar.
 - **Dock:**
   - Pinned and running apps with running-indicator dots.
@@ -167,7 +168,7 @@ The source is in `crates/wdock/src`:
 - `app.rs`: message loop, shortcuts and game mode.
 - `ui/`: Direct2D bars and popups.
 - `platform/`: Win32 wrappers, the tray host and the AppBar.
-- `services/`: audio, network, power, brightness and app index.
+- `services/`: audio, network, Wi-Fi list, power, brightness and app index.
 - `model/`: configuration, windows, tray and search.
 
 ## Measurements

@@ -10,6 +10,7 @@ pub mod icons;
 pub mod media;
 pub mod network;
 pub mod power;
+pub mod wifi;
 
 use std::cell::RefCell;
 

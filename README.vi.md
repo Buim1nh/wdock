@@ -33,6 +33,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
   - Tiêu đề cửa sổ đang mở.
   - Khay hệ thống do wdock tự giữ.
   - Biểu tượng âm lượng, mạng, pin; bấm vào để mở Quick Settings.
+  - Danh sách Wi-Fi trong Quick Settings: mở rộng dòng mạng để xem các mạng đang thấy (độ mạnh sóng, ổ khóa, mạng đang kết nối), làm mới, kết nối mạng đã lưu, ngắt kết nối, bật/tắt Wi-Fi. Mạng chưa có profile sẽ mở cài đặt Wi-Fi của Windows nên wdock không bao giờ hỏi mật khẩu. Chỉ quét khi danh sách đang mở.
   - Đồng hồ; bấm vào để mở lịch.
 - **Dock:**
   - App ghim và app đang chạy, có chấm báo app đang chạy.
