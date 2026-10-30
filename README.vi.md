@@ -189,12 +189,24 @@ Cần thoát wdock trước khi cài đè.
 
 Nếu Win+Alt+Space đã bị app khác chiếm, wdock ghi vào log và launcher vẫn mở bằng nút trên top bar. Workspace và Overview dùng chuột.
 
+## Tùy chỉnh
+
+Thay đổi tùy chọn không cần chạy lại trình cài đặt. Bấm vào các icon trạng thái trên top bar, rồi chọn **Cài đặt wdock**. Panel này chỉnh được:
+
+- giao diện, nền (backdrop), top bar trên tất cả màn hình hoặc chỉ màn hình chính
+- tự ẩn dock, Dynamic Island, hiệu ứng equalizer
+- khởi động cùng Windows (một tác vụ theo người dùng tên `wdock`, cùng tác vụ mà trình cài đặt tạo)
+
+Mỗi thay đổi được lưu vào `config.toml` (giữ nguyên chú thích và các khóa khác) và áp dụng ngay. **Mở file cấu hình** mở file trong trình soạn thảo mặc định, để chỉnh các khóa khác.
+
+Các khóa không có trong panel (ví dụ `[workspaces]`, `[dock] icon_size` hoặc phím tắt) vẫn cần khởi động lại: bấm Ctrl+Alt+Shift+Q rồi chạy `Start-ScheduledTask wdock` trong PowerShell, hoặc đăng xuất rồi đăng nhập lại.
+
 ## Cấu hình
 
 File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động từ mẫu có chú thích ở lần chạy đầu.
 
 - Lưu file dưới dạng UTF-8 không có BOM.
-- Thay đổi chỉ có hiệu lực sau khi khởi động lại wdock: bấm Ctrl+Alt+Shift+Q rồi chạy `Start-ScheduledTask wdock` trong PowerShell, hoặc đăng xuất rồi đăng nhập lại.
+- Sửa trực tiếp trong file chỉ có hiệu lực sau khi khởi động lại wdock: bấm Ctrl+Alt+Shift+Q rồi chạy `Start-ScheduledTask wdock` trong PowerShell, hoặc đăng xuất rồi đăng nhập lại.
 
 | Mục | Thiết lập chính |
 |---|---|

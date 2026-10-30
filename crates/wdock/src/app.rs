@@ -67,6 +67,8 @@ const WM_APP_REBUILD: u32 = WM_APP + 1;
 const WM_APP_NOTIFY: u32 = WM_APP + 4;
 /// An AppBar notification says a full-screen app came or went.
 const WM_APP_FULLSCREEN: u32 = WM_APP + 5;
+/// The settings panel saved a key to config.toml: reload it and rebuild.
+const WM_APP_CONFIG: u32 = WM_APP + 24;
 const TIMER_REBUILD: usize = 1;
 const TIMER_FOCUS: usize = 2;
 const TIMER_RECLAIM: usize = 3;
@@ -111,6 +113,11 @@ pub fn notify_model() {
 /// Checks the bars' reserved strips shortly (explorer applies them asynchronously).
 fn check_appbars_later() {
     unsafe { SetTimer(Some(main_hwnd()), TIMER_APPBAR, APPBAR_CHECK_MS, None) };
+}
+
+/// Reloads config.toml and rebuilds the bars (called after the settings panel saves).
+pub fn reload_config() {
+    post_main(WM_APP_CONFIG);
 }
 
 /// Re-evaluates game mode soon (from an AppBar notification).
@@ -306,6 +313,22 @@ impl Shell {
             bar::notify_model_changed(hwnd);
         }
         popup::notify();
+    }
+
+    /// Applies the saved config live. The settings panel is rebuilt with the
+    /// bars (its popups are closed by `rebuild`), so it is reopened if it was open.
+    fn reload_config(&mut self, hwnd: HWND) {
+        let reopen = popup::settings_reopen();
+        self.config = config::load();
+        self.rebuild();
+        if self.config.island.enabled {
+            media::start(hwnd);
+        } else {
+            media::stop();
+        }
+        if let Some((anchor, scale)) = reopen {
+            popup::toggle_settings(anchor, scale);
+        }
     }
 }
 
@@ -578,6 +601,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
         WM_APP_FULLSCREEN => {
             with_shell(Shell::update_fullscreen);
+            LRESULT(0)
+        }
+        WM_APP_CONFIG => {
+            with_shell(|shell| shell.reload_config(hwnd));
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_APPBAR => {

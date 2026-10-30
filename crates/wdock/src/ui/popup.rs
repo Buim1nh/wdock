@@ -20,7 +20,7 @@ use crate::ui::gfx::Gfx;
 use crate::ui::popups::{
     balloon::BalloonView, calendar::CalendarView, launcher::LauncherView, menu::MenuItem, menu::MenuView,
     overflow::OverflowView, overview::OverviewView, preview::PreviewView, quick_settings::QuickSettingsView,
-    tooltip::TooltipView,
+    settings::SettingsView, tooltip::TooltipView,
 };
 use crate::ui::popups::preview;
 use crate::ui::theme::Theme;
@@ -49,11 +49,14 @@ thread_local! {
     /// Windows shown by the open preview, so hovering the same icon keeps it.
     static PREVIEW_OF: RefCell<Vec<HWND>> = const { RefCell::new(Vec::new()) };
     static GAME_MODE: Cell<bool> = const { Cell::new(false) };
+    static SETTINGS: Cell<Option<HWND>> = const { Cell::new(None) };
+    /// Where the settings panel is anchored, so a reload can reopen it.
+    static SETTINGS_AT: Cell<Option<(RECT, f32)>> = const { Cell::new(None) };
 }
 
 /// Slots closed whenever another panel opens.
-fn panels() -> [&'static std::thread::LocalKey<Cell<Option<HWND>>>; 7] {
-    [&OVERFLOW, &QUICK, &CALENDAR, &LAUNCHER, &OVERVIEW, &MENU, &PREVIEW]
+fn panels() -> [&'static std::thread::LocalKey<Cell<Option<HWND>>>; 8] {
+    [&OVERFLOW, &QUICK, &CALENDAR, &LAUNCHER, &OVERVIEW, &MENU, &PREVIEW, &SETTINGS]
 }
 
 fn context() -> Option<Rc<PopupContext>> {
@@ -80,6 +83,7 @@ pub fn set_context(ctx: Option<PopupContext>) {
     destroy(&OVERVIEW);
     destroy(&MENU);
     destroy(&PREVIEW);
+    destroy(&SETTINGS);
     hide_balloon();
     CTX.set(ctx.map(Rc::new));
 }
@@ -188,6 +192,17 @@ fn close_panels() {
 /// Control-centre panel under the status icons.
 pub fn toggle_quick_settings(anchor: RECT, scale: f32) {
     toggle_panel(&QUICK, scale, || Box::new(QuickSettingsView::new(anchor, scale)));
+}
+
+/// wdock's settings, under the status icons like the quick-settings panel.
+pub fn toggle_settings(anchor: RECT, scale: f32) {
+    SETTINGS_AT.set(Some((anchor, scale)));
+    toggle_panel(&SETTINGS, scale, || Box::new(SettingsView::new(anchor, scale)));
+}
+
+/// Where the settings panel is open, if it is; a reload reopens it there.
+pub fn settings_reopen() -> Option<(RECT, f32)> {
+    SETTINGS.get().is_some_and(alive).then(|| SETTINGS_AT.get()).flatten()
 }
 
 /// Month calendar under the clock.

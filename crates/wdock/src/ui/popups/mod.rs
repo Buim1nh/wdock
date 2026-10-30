@@ -5,6 +5,7 @@ pub mod menu;
 pub mod overflow;
 pub mod overview;
 pub mod preview;
+pub mod settings;
 pub mod quick_settings;
 pub mod tiles;
 pub mod tooltip;
