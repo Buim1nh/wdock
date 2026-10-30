@@ -2,14 +2,28 @@
 
 [English](README.md) · **Tiếng Việt**
 
-wdock là thanh menu phía trên (top bar) và dock kiểu macOS cho Windows 11, viết bằng Rust.
+wdock là bộ top bar, dock và Dynamic Island kiểu macOS cho Windows 11, viết bằng Rust.
 
 - Mục tiêu tài nguyên: RAM dưới 25 MB, CPU gần 0% khi rảnh, 0% khi đang chơi game.
-- Không inject vào tiến trình khác và không dùng keyboard hook, nên an toàn với anti-cheat.
+- Không inject code vào tiến trình khác, không dùng keyboard hook, không tự gọi mạng, nên an toàn khi chạy cùng anti-cheat.
+- Chạy song song với explorer chứ không thay thế nó. Các tính năng của Windows vẫn hoạt động, và thoát wdock thì taskbar bình thường quay lại.
 
 [![Video demo wdock](docs/media/demo.gif)](docs/media/demo.mp4)
 
 *Video demo gồm dock phóng to, launcher, bảng phím tắt, lịch và Quick Settings. Bấm vào để xem bản MP4 1080p.*
+
+## Mục lục
+
+- [Ảnh chụp màn hình](#ảnh-chụp-màn-hình)
+- [Tính năng](#tính-năng)
+- [Cách hoạt động](#cách-hoạt-động)
+- [Cài đặt](#cài-đặt)
+- [Phím tắt](#phím-tắt)
+- [Cấu hình](#cấu-hình)
+- [Xử lý sự cố](#xử-lý-sự-cố)
+- [Gỡ cài đặt](#gỡ-cài-đặt)
+- [Phát triển](#phát-triển)
+- [Kết quả đo](#kết-quả-đo)
 
 ## Ảnh chụp màn hình
 
@@ -22,39 +36,74 @@ Tất cả ảnh có độ phân giải 1920×1080.
 | ![Launcher](docs/media/launcher.png) | ![Bảng phím tắt](docs/media/shortcuts.png) |
 | Launcher (Win+Alt+Space) | Bảng phím tắt (Win+Alt+/) |
 | ![Lịch](docs/media/calendar.png) | ![Quick Settings](docs/media/quick-settings.png) |
+| Lịch | Quick Settings đang mở danh sách Wi-Fi và thiết bị âm thanh |
 | ![Dynamic Island mở rộng](docs/media/island.png) | |
-| Lịch | Quick Settings: mạng, âm lượng, độ sáng, pin, nguồn |
+| Dynamic Island mở rộng | |
 
 ## Tính năng
 
-- **Top bar:**
-  - Nút launcher và nút mở bảng phím tắt.
-  - Ô chọn workspace (mặc định 4 workspace).
-  - Tiêu đề cửa sổ đang mở.
-  - Khay hệ thống do wdock tự giữ.
-  - Biểu tượng âm lượng, mạng, pin; bấm vào để mở Quick Settings.
-  - Quick Settings liệt kê các thiết bị phát âm thanh đang hoạt động cạnh thanh Sound (loa, tai nghe, HDMI, Bluetooth); bấm để đặt làm mặc định cho mọi vai trò. Dùng giao diện COM không tài liệu `IPolicyConfig`, nếu Windows từ chối thì mở trang cài đặt Sound.
-  - Đồng hồ; bấm vào để mở lịch.
-- **Dock:**
-  - App ghim và app đang chạy, có chấm báo app đang chạy.
-  - Phóng to kiểu macOS, có nhãn tên.
-  - Preview cửa sổ trực tiếp.
-  - Kéo thả để sắp xếp, có menu chuột phải.
-  - Tự ẩn thông minh.
+### Top bar
+
+- Nút launcher và nút mở bảng phím tắt.
+- Ô chọn workspace (mặc định 4 workspace cho mỗi màn hình).
+- Tiêu đề cửa sổ đang mở.
+- Khay hệ thống do wdock tự giữ: icon, thông báo balloon và phần tràn (overflow) hoạt động như trên taskbar.
+- Biểu tượng âm lượng, mạng, pin; bấm vào để mở Quick Settings.
+- Đồng hồ; bấm vào để mở lịch.
+
+### Quick Settings
+
+- **Mạng:** dòng kết nối mở rộng ra thành danh sách các mạng Wi-Fi đang thấy.
+  - Mỗi mạng có tên, vạch sóng, ổ khóa nếu có mật khẩu, và chữ "Connected" ở mạng đang dùng. Danh sách sắp theo độ mạnh sóng, có nút quét lại.
+  - Bấm vào mạng đã có profile lưu sẵn thì kết nối luôn. Với mạng mới, wdock không tự hỏi mật khẩu mà mở trang Wi-Fi của Windows.
+  - Có công tắc bật/tắt Wi-Fi và nút ngắt kết nối. Máy không có Wi-Fi sẽ báo danh sách không khả dụng.
+  - Chỉ quét mạng khi danh sách đang mở.
+- **Âm thanh:** thanh âm lượng và danh sách thiết bị phát đang hoạt động (loa, tai nghe, HDMI, Bluetooth).
+  - Bấm vào một thiết bị để đặt nó làm mặc định cho mọi vai trò; thanh âm lượng chuyển theo thiết bị mới.
+  - Tính năng dùng interface chưa công bố `IPolicyConfig` như các công cụ đổi thiết bị khác. Nếu Windows từ chối, trang Sound settings sẽ mở ra thay thế.
+- **Màn hình:** thanh độ sáng, với màn hình hỗ trợ.
+- **Pin** và các nút khóa máy, ngủ, đăng xuất, khởi động lại, tắt máy, mở Settings. Các thao tác nguồn đều hỏi lại trước khi thực hiện.
+
+### Dock
+
+- App ghim và app đang chạy, có chấm dưới app đang chạy.
+- Phóng to kiểu macOS, có nhãn tên.
+- Xem trước cửa sổ trực tiếp khi rê chuột.
+- Kéo thả để sắp xếp hoặc ghim, có menu chuột phải.
+- Tự ẩn thông minh: dock trượt xuống khi có cửa sổ đè lên và hiện lại khi đưa chuột xuống đáy màn hình.
+
+### Dynamic Island
+
+Viên thuốc ở giữa đỉnh mỗi màn hình, rê chuột vào thì mở rộng.
+
+- **Đang phát:** dùng được với mọi app có điều khiển media của Windows (Spotify, trình duyệt, trình phát nhạc).
+  - Tên bài, ca sĩ, play/pause, bài trước/sau và thanh tiến độ kéo tua được.
+  - Hiện ảnh bìa nếu app cung cấp. Nhiều trang web không có ảnh bìa (trình duyệt chỉ chuyển tiếp những gì trang khai báo), khi đó island hiện biểu tượng app đang phát, và khi mở rộng thì hiện khung hình trực tiếp của cửa sổ đang phát.
+  - Equalizer chuyển động khi đang phát. Bộ dựng hình của Windows (DWM) tự chạy hoạt ảnh này, nên wdock không tốn công cho từng khung hình.
+- **Pomodoro:** start, pause, reset ngay trên island mở rộng. Viên thuốc thu gọn hiện số phút còn lại; hết mỗi phiên Focus hoặc Break có tiếng chuông và thông báo.
+- **Thông báo:** island giãn ra trong chốc lát khi đổi âm lượng, độ sáng, cắm/rút sạc, pin yếu, đổi mạng hoặc đổi thiết bị âm thanh. Các pop-up gốc của Windows vẫn giữ nguyên.
+
+### Launcher và cửa sổ
+
 - **Launcher:** tìm gần đúng (fuzzy) trong các app đã cài (Win32 và Store) và các trang Settings.
-- **Dynamic Island:** viên thuốc giữa đỉnh màn hình, rê chuột vào sẽ mở rộng: đang phát nhạc (mọi app có điều khiển media của Windows: ảnh bìa, phát/dừng, trước/sau, tua), đồng hồ Pomodoro và thông báo ngắn khi đổi âm lượng, độ sáng, sạc/pin, mạng, thiết bị âm thanh. Chạy theo sự kiện, ẩn khi có app toàn màn hình; `[island] enabled = false` để tắt hẳn.
-- **Quản lý cửa sổ:** switcher (Alt+\`), overview (Win+\`) và workspace ảo.
-- **Game mode:** khi một app toàn màn hình (game, F11 trên trình duyệt) ở phía trước, các thanh trên màn hình đó ngừng vẽ, ngừng chạy timer, và wdock cũng ngừng theo dõi việc di chuyển bên trong game.
+- **Switcher** (Alt+\`), **Overview** toàn bộ cửa sổ (Win+\`), và **workspace ảo** cho từng màn hình.
 
-## Cách hoạt động (chế độ lai)
+### Game mode
 
-Explorer vẫn là shell của Windows, wdock chạy song song với nó:
+Khi có app toàn màn hình ở phía trước (game, video toàn màn hình, F11 trên trình duyệt), top bar, dock và island trên màn hình đó bị ẩn, ngừng vẽ và ngừng chạy timer. wdock cũng ngừng theo dõi việc di chuyển bên trong game, nên CPU là 0%.
 
-- Taskbar của explorer bị ẩn (auto-hide cộng SW_HIDE). Trạng thái gốc được lưu vào `%LOCALAPPDATA%\wdock\taskbar.txt` và trả lại khi wdock thoát.
-- Top bar đăng ký làm AppBar, nên cửa sổ maximize không bị che.
-- Dock mặc định ở chế độ smart: tự trượt xuống khi có cửa sổ đè lên, hiện lại khi đưa chuột xuống đáy màn hình.
-- wdock tự giữ khay hệ thống (tray). Các thông điệp AppBar mà nó không xử lý thì chuyển tiếp cho explorer.
-- Win+Shift+S, PrtScn, Win+X, ms-settings và các phím tắt khác của Windows vẫn dùng được như bình thường.
+## Cách hoạt động
+
+Explorer vẫn là shell của Windows ("chế độ lai"), wdock chạy song song với nó:
+
+- **Taskbar của explorer** bị ẩn bằng auto-hide cộng SW_HIDE. Trạng thái gốc được lưu vào `%LOCALAPPDATA%\wdock\taskbar.txt` và được trả lại khi wdock thoát, khi wdock crash quá nhiều lần, hoặc khi kết thúc phiên đăng nhập.
+- **Top bar** đăng ký làm AppBar, nên explorer giữ cửa sổ maximize nằm dưới nó.
+  - Sau khi dựng thanh và sau khi thoát app toàn màn hình, wdock kiểm tra xem chỗ dành cho thanh đã thật sự được giữ chưa.
+  - Nếu explorer không giữ chỗ, wdock đăng ký lại. Nếu vẫn không được, wdock tự đặt work area cho màn hình đó và trả lại khi thoát.
+- **Dock** ở chế độ smart không giữ chỗ. Với `auto_hide = "off"`, dock đăng ký thêm một AppBar ở đáy.
+- **Khay hệ thống:** wdock giữ cửa sổ mà các app gửi icon khay tới, và chuyển tiếp cho taskbar của explorer những thông điệp nó không xử lý.
+- **Phím tắt** dùng `RegisterHotKey` với các tổ hợp Windows không dùng. Win+Shift+S, PrtScn, Win+X, link `ms-settings:` và các phím tắt khác của Windows vẫn hoạt động.
+- **Vẽ giao diện:** mặc định dùng Direct2D trên CPU (WARP), ghép hình bằng DirectComposition và hiệu ứng acrylic của DWM. Mọi thứ chạy theo sự kiện; khi không có gì thay đổi thì không timer nào chạy.
 
 ## Cài đặt
 
@@ -64,87 +113,111 @@ Explorer vẫn là shell của Windows, wdock chạy song song với nó:
 powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 ```
 
-Script này làm các việc sau:
+Script này:
 
 1. Build bản release.
 2. Copy file chạy vào `%LOCALAPPDATA%\Programs\wdock\wdock.exe`.
-3. Tạo scheduled task tên `wdock` cho tài khoản của bạn, chạy `"<exe>" --guard` mỗi lần đăng nhập. Dùng task thay cho khóa registry `Run` vì khi script chạy từ terminal bên trong một app dạng gói (MSIX), Windows chuyển hướng các thay đổi `HKCU` vào gói đó, nên explorer không thấy mục `Run`.
+3. Tạo scheduled task tên `wdock` cho tài khoản của bạn, chạy `"<exe>" --guard` mỗi lần đăng nhập.
 4. Khởi động wdock ngay.
+
+Dùng scheduled task thay cho khóa registry `Run` vì khi script chạy từ terminal bên trong một app dạng gói (MSIX), Windows chuyển hướng các thay đổi `HKCU` vào gói đó, và explorer sẽ không bao giờ thấy mục `Run`.
 
 Các tùy chọn:
 
-- `-NoBuild`: dùng bản `target\release` đã có.
-- `-NoStart`: chỉ cài, không khởi động.
-- `-WithUsage`: cài thêm [agent-usage-bar](https://github.com/Buim1nh/agent-usage-bar), ứng dụng khay tùy chọn hiển thị hạn mức sử dụng của Claude, Codex và Antigravity (kèm biểu đồ đóng góp GitHub) trên thanh trên của wdock. Script dùng thư mục `agent-usage-bar` nằm cạnh repo này, tự clone nếu chưa có (`-UsageRepo <đường dẫn>` để chọn chỗ khác), và ứng dụng tự chạy khi đăng nhập bằng scheduled task riêng. Đây là chương trình tách riêng để bản thân wdock vẫn không giữ thông tin đăng nhập và không gọi mạng. Mặc định tắt.
+| Tùy chọn | Tác dụng |
+|---|---|
+| `-NoBuild` | dùng bản `target\release` đã build |
+| `-NoStart` | chỉ cài, không khởi động wdock |
+| `-WithUsage` | cài thêm [agent-usage-bar](https://github.com/Buim1nh/agent-usage-bar) (xem bên dưới) |
+| `-UsageRepo <path>` | thư mục mã nguồn của agent-usage-bar (mặc định là thư mục `agent-usage-bar` cạnh repo này, tự clone nếu chưa có) |
 
 Cần thoát wdock trước khi cài đè.
 
-Tiến trình `--guard` chạy shell `--shell`:
+**agent-usage-bar** là một app khay riêng, không bắt buộc. Nó hiện mức sử dụng của Claude, Codex, Antigravity (và biểu đồ đóng góp GitHub) trên top bar của wdock. App được tách riêng để bản thân wdock vẫn không giữ thông tin đăng nhập và không gọi mạng. Nó tự chạy khi đăng nhập bằng scheduled task riêng. Mặc định không cài.
+
+**Guard:** tiến trình `--guard` chạy lúc đăng nhập sẽ chạy shell dưới dạng tiến trình con `--shell`.
 
 - Nếu shell crash, guard khởi động lại nó sau khoảng 1 giây.
-- Nếu shell crash 3 lần trong 60 giây, guard trả lại taskbar của explorer rồi dừng.
+- Nếu crash 3 lần trong 60 giây, guard bỏ cuộc và trả lại taskbar của explorer.
+- Mỗi phiên đăng nhập chỉ chạy một guard.
 
 ## Phím tắt
 
-Tất cả đều dùng `RegisterHotKey` với tổ hợp không trùng explorer. Win+Alt+/ (hoặc nút bàn phím trên top bar) mở bảng tóm tắt.
+Win+Alt+/ (hoặc nút bàn phím trên top bar) mở bảng tóm tắt các phím này; bảng kéo đi được.
 
 | Phím | Chức năng |
 |---|---|
-| Win+Alt+Space (hoặc Ctrl+Alt+Space nếu còn trống) | Launcher |
-| Alt+\` / Alt+Shift+\` | Chuyển cửa sổ (switcher) |
-| Win+\` | Overview tất cả cửa sổ |
+| Win+Alt+Space (thêm Ctrl+Alt+Space nếu còn trống) | Launcher |
+| Alt+\` / Alt+Shift+\` | Chuyển cửa sổ (nhả Alt để chọn) |
+| Win+\` | Overview workspace hiện tại |
 | Win+Ctrl+Alt+← / → / 1–9 | Chuyển workspace |
 | Win+Alt+Shift+← / → / 1–9 | Mang cửa sổ đang mở sang workspace khác |
-| Win+Alt+/ | Hiện hoặc ẩn bảng phím tắt (kéo được, nhớ vị trí) |
+| Win+Alt+/ | Hiện hoặc ẩn bảng phím tắt |
 | Ctrl+Alt+Shift+Q | Thoát wdock, trả lại taskbar của explorer |
+
+Nếu một tổ hợp đã bị app khác chiếm, wdock ghi vào log rồi bỏ qua tổ hợp đó.
 
 ## Cấu hình
 
-- File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động từ mẫu có chú thích ở lần chạy đầu.
+File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động từ mẫu có chú thích ở lần chạy đầu.
+
 - Lưu file dưới dạng UTF-8 không có BOM.
-- Thay đổi chỉ có hiệu lực sau khi khởi động lại wdock: bấm Ctrl+Alt+Shift+Q rồi chạy `wdock.exe --guard`, hoặc đăng xuất rồi đăng nhập lại.
-- Các mục: `[appearance]`, `[topbar]`, `[tray]`, `[dock]`, `[workspaces]`, `[switcher]`, `[island]`, `[performance]`.
-- Trong `[dock]`:
-  - `icon_size` mặc định là 32.
-  - `magnification` mặc định là 2.0.
-  - `auto_hide` nhận `"smart"`, `"on"` hoặc `"off"`. Với `"off"`, dock giữ cố định một dải ở đáy màn hình.
+- Thay đổi chỉ có hiệu lực sau khi khởi động lại wdock: bấm Ctrl+Alt+Shift+Q rồi chạy `Start-ScheduledTask wdock` trong PowerShell, hoặc đăng xuất rồi đăng nhập lại.
+
+| Mục | Thiết lập chính |
+|---|---|
+| `[appearance]` | `theme` = `"auto"`, `"dark"` hoặc `"light"`; `backdrop` = `"acrylic"` hoặc `"solid"` |
+| `[performance]` | `renderer` = `"software"` (WARP, khoảng 10 MB, không đánh thức GPU rời) hoặc `"gpu"` |
+| `[topbar]` | `height` (30), `monitors` (`"all"` hoặc `"primary"`), `date_format`, `time_format` |
+| `[tray]` | `max_visible`: số icon trước nút tràn (12); `overflow`: các tên file chạy luôn bị đưa vào phần tràn |
+| `[dock]` | `icon_size` (32), `monitors` (`"primary"`), `windows` (`"all"` hoặc `"this-monitor"`), `magnification` (2.0), `auto_hide` (`"smart"`, `"on"`, `"off"`), `pinned` |
+| `[workspaces]` | `count`: số workspace mỗi màn hình (4, tối đa 9) |
+| `[switcher]` | `enabled` (true) |
+| `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
+
+Ghim, bỏ ghim hoặc sắp xếp lại trên dock sẽ lưu danh sách vào `%LOCALAPPDATA%\wdock\pinned.txt`, và file này được ưu tiên hơn `pinned`; xóa file đó để quay lại dùng cấu hình.
 
 Dữ liệu và log nằm trong `%LOCALAPPDATA%\wdock\`:
 
-- `logs\wdock.log` và `logs\wdock-guard.log`
-- `pinned.txt` (app ghim)
-- `hidden.txt` (cửa sổ ở workspace khác)
-- `taskbar.txt`
-- `shortcuts.txt`
+| File | Nội dung |
+|---|---|
+| `logs\wdock.log`, `logs\wdock-guard.log` | log (xoay vòng khi vượt 2 MB) |
+| `pinned.txt` | app ghim, theo thứ tự trên dock |
+| `hidden.txt` | cửa sổ đang ở workspace khác |
+| `taskbar.txt` | trạng thái auto-hide gốc của explorer |
+| `shortcuts.txt` | vị trí bảng phím tắt sau khi kéo |
 
-## Gỡ cài đặt và khôi phục
+## Xử lý sự cố
 
-Gỡ cài đặt:
+| Sự cố | Cách xử lý |
+|---|---|
+| Top bar đè lên cửa sổ maximize | wdock tự sửa trong vài giây (xem [Cách hoạt động](#cách-hoạt-động)). Lỗi xảy ra khi bộ quản lý AppBar của explorer bị kẹt, ví dụ sau khi wdock bị khởi động lại liên tục nhiều lần. Nếu vẫn còn, khởi động lại explorer trong Task Manager. |
+| Taskbar của explorer không hiện lại sau khi wdock bị kill | Chạy `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --restore-taskbar`. |
+| Thiếu một icon khay | Khởi động lại app sở hữu icon đó. wdock yêu cầu các app thêm lại icon lúc khởi động và thêm một lần sau 5 giây. |
+| Island không có ảnh bìa khi xem video | Trang web không khai báo ảnh bìa. Island sẽ hiện biểu tượng app, và khi mở rộng thì hiện khung hình trực tiếp của cửa sổ. |
+| wdock không tự chạy khi đăng nhập | Kiểm tra task `wdock` trong Task Scheduler, hoặc chạy lại `scripts\install.ps1 -NoBuild`. |
+
+## Gỡ cài đặt
 
 ```bash
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 ```
 
-Script này gỡ scheduled task (và mục `Run` của các bản cài cũ), dừng guard rồi dừng shell, sau đó trả lại taskbar của explorer và các cửa sổ đang ẩn ở workspace khác. Các tùy chọn:
+Script này:
 
-- `-RemoveFiles`: xóa luôn file chạy.
-- `-RemoveData`: xóa log, cache và trạng thái.
+1. Gỡ scheduled task (và mục `Run` của các bản cài cũ).
+2. Dừng guard rồi dừng shell.
+3. Trả lại taskbar của explorer và các cửa sổ đang ẩn ở workspace khác.
 
-File cấu hình được giữ lại trong mọi trường hợp.
-
-Nếu wdock bị kill mà taskbar không hiện lại, chạy:
-
-```bash
-"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --restore-taskbar
-```
-
-wdock cũng tự trả lại taskbar khi tắt máy hoặc đăng xuất (WM_QUERYENDSESSION).
+`-RemoveFiles` xóa luôn file chạy, `-RemoveData` xóa log, cache và trạng thái. File cấu hình luôn được giữ lại.
 
 ## Phát triển
 
-- `cargo run --release -- --dev`: chạy kèm supervisor dev, tự khởi động lại khi crash, ghi log vào `wdock-dev.log`.
-- `cargo test --release`: chạy unit test.
-- `cargo clippy --release`: hiện không có cảnh báo nào.
+| Lệnh | Mục đích |
+|---|---|
+| `cargo run --release -- --dev` | chạy kèm supervisor dev, tự khởi động lại khi crash, ghi log vào `wdock-dev.log` |
+| `cargo test --release` | chạy unit test |
+| `cargo clippy --release` | kiểm tra lint (hiện không có cảnh báo nào) |
 
 Các chế độ dòng lệnh:
 
@@ -153,28 +226,31 @@ Các chế độ dòng lệnh:
 | không có hoặc `--shell` | chạy shell |
 | `--guard` | supervisor lúc đăng nhập |
 | `--dev` | supervisor dev |
-| `--restore-taskbar` | trả lại taskbar của explorer rồi thoát |
+| `--restore-taskbar` | trả lại taskbar của explorer và các cửa sổ đang ẩn, rồi thoát |
 
 Mã nguồn nằm trong `crates/wdock/src`:
 
-- `app.rs`: vòng lặp message, phím tắt, game mode.
-- `ui/`: các thanh và popup vẽ bằng Direct2D.
-- `platform/`: lớp bọc Win32, tray host, AppBar.
-- `services/`: âm thanh, mạng, nguồn, độ sáng, chỉ mục app.
-- `model/`: cấu hình, cửa sổ, khay, tìm kiếm.
+| Thư mục | Nội dung |
+|---|---|
+| `app.rs` | vòng lặp message, phím tắt, game mode, kiểm tra AppBar |
+| `ui/` | các thanh Direct2D, dock, island, popup, lớp composition |
+| `platform/` | lớp bọc Win32, tray host, AppBar, sự kiện cửa sổ |
+| `services/` | âm thanh, mạng và Wi-Fi, nguồn, độ sáng, phiên media, chỉ mục app, icon |
+| `model/` | cấu hình, cửa sổ và workspace, khay, tìm kiếm, Pomodoro |
 
 ## Kết quả đo
 
-Đo trên Windows 11 với 2 màn hình 1080p, bản release.
+Bản release trên Windows 11, 2 màn hình 1080p.
 
 | Hạng mục | Kết quả |
 |---|---|
-| Working set riêng (shell / guard) | ~13–21 MB / ~1.2 MB |
-| CPU khi rảnh | 15–47 ms mỗi 60 giây (dưới 0,1%) |
+| Working set riêng (shell / guard) | ~14–19 MB / ~1,2 MB |
+| CPU khi rảnh | 15–110 ms mỗi 60 giây (dưới 0,2%) |
+| CPU khi đang phát media (equalizer chuyển động) | ~16 ms mỗi 60 giây; tải của DWM không đổi |
 | CPU khi có app toàn màn hình ở phía trước | 0 ms trong 20 giây |
 | Thời gian phát hiện F11/toàn màn hình | ~15 ms |
-| Rò rỉ (200 lần mở/đóng bảng phím tắt + 20 lần launcher) | handle ổn định ~614, GDI 40–43, bộ nhớ dừng ở ~32 MB private bytes |
-| Shell crash | guard khởi động lại sau ~1 giây, đủ icon khay, taskbar vẫn ẩn |
+| Rò rỉ (200 lần mở/đóng bảng phím tắt + 20 lần launcher) | handle ổn định, GDI 40–43, bộ nhớ dừng ở một mức |
+| Shell crash | guard khởi động lại sau ~1 giây; icon khay hiện lại, taskbar vẫn ẩn |
 
 ## Giấy phép
 
