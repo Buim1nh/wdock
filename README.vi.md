@@ -107,6 +107,18 @@ Explorer vẫn là shell của Windows ("chế độ lai"), wdock chạy song so
 
 ## Cài đặt
 
+### Từ bản phát hành (khuyên dùng)
+
+1. Tải `wdock-setup-<version>.exe` ở [bản phát hành mới nhất](https://github.com/Buim1nh/wdock/releases/latest).
+2. Chạy file đó. Bộ cài hỏi một lần, rồi cài cho tài khoản của bạn (không cần admin), khởi động wdock và thêm wdock vào **Settings > Apps**. Chạy bộ cài bản mới hơn thì sẽ cập nhật đè lên bản cũ.
+3. Windows SmartScreen có thể cảnh báo vì file chưa được ký số: chọn **More info > Run anyway**.
+
+Để gỡ, vào **Settings > Apps > wdock > Uninstall**, hoặc chạy `%LOCALAPPDATA%\Programs\wdock\uninstall.exe --uninstall`. Thêm `/S` vào bộ cài hoặc trình gỡ để chạy im lặng.
+
+Bản phát hành còn có file zip dạng portable gồm `wdock.exe` và các script cài đặt.
+
+### Từ mã nguồn
+
 Để build cần [Rust toolchain](https://rustup.rs) (stable, edition 2024). Cài đặt không cần quyền admin.
 
 ```bash
@@ -217,7 +229,8 @@ Script này:
 |---|---|
 | `cargo run --release -- --dev` | chạy kèm supervisor dev, tự khởi động lại khi crash, ghi log vào `wdock-dev.log` |
 | `cargo test --release` | chạy unit test |
-| `cargo clippy --release` | kiểm tra lint (hiện không có cảnh báo nào) |
+| `cargo clippy --release --workspace` | kiểm tra lint (hiện không có cảnh báo nào) |
+| `cargo build --release -p wdock && cargo build --release -p wdock-setup` | build bộ cài, có nhúng `wdock.exe` (`crates/wdock-setup`) |
 
 Các chế độ dòng lệnh:
 

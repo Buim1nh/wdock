@@ -1,0 +1,13 @@
+[package]
+name = "wdock-setup"
+description = "Per-user installer for wdock"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+]

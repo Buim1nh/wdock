@@ -107,6 +107,18 @@ Explorer stays the Windows shell ("hybrid mode"), and wdock runs alongside it:
 
 ## Installation
 
+### From a release (recommended)
+
+1. Download `wdock-setup-<version>.exe` from the [latest release](https://github.com/Buim1nh/wdock/releases/latest).
+2. Run it. It asks once, then installs for your account (no admin), starts wdock and lists it in **Settings > Apps**. Running a newer setup later updates in place.
+3. Windows SmartScreen may warn because the file is not code-signed: choose **More info > Run anyway**.
+
+To remove it, use **Settings > Apps > wdock > Uninstall**, or run `%LOCALAPPDATA%\Programs\wdock\uninstall.exe --uninstall`. Add `/S` to either the setup or the uninstaller for a silent run.
+
+The release also has a portable zip with `wdock.exe` and the install scripts.
+
+### From source
+
 Building needs the [Rust toolchain](https://rustup.rs) (stable, edition 2024). Installing does not need admin rights.
 
 ```bash
@@ -217,7 +229,8 @@ The script:
 |---|---|
 | `cargo run --release -- --dev` | run under a development supervisor that restarts on crashes and logs to `wdock-dev.log` |
 | `cargo test --release` | unit tests |
-| `cargo clippy --release` | lints (currently no warnings) |
+| `cargo clippy --release --workspace` | lints (currently no warnings) |
+| `cargo build --release -p wdock && cargo build --release -p wdock-setup` | the installer, with `wdock.exe` embedded (`crates/wdock-setup`) |
 
 Command-line modes:
 
