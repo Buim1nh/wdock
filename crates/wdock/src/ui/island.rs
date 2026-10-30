@@ -42,6 +42,7 @@ use crate::services::media::{self, Command, Media};
 use crate::services::{self, NetState, SystemStatus};
 use crate::ui::backdrop::Corners;
 use crate::ui::bar::{self, BarSpec, Button, PaintCx, View};
+use crate::ui::eq_layer::EqLayer;
 use crate::ui::gfx::{Gfx, rect, rgba, rounded};
 use crate::ui::popup;
 use crate::platform::wininfo;
@@ -217,7 +218,14 @@ fn approach(current: &mut f32, target: f32) -> bool {
 /// How far a pill of width `w` has grown from the idle capsule to the
 /// expanded panel, 0.0 ..= 1.0.
 fn expansion(w: f32, scale: f32) -> f32 {
-    ((w - IDLE.0 * scale) / ((EXPANDED.0 - IDLE.0) * scale)).clamp(0.0, 1.0)
+    expansion_from(w, IDLE.0, scale)
+}
+
+/// How far a pill `w` pixels wide is from its compact width `compact` (DIPs)
+/// to fully expanded: 0 at rest, 1 open.
+fn expansion_from(w: f32, compact: f32, scale: f32) -> f32 {
+    let span = (EXPANDED.0 - compact).max(1.0) * scale;
+    ((w - compact * scale) / span).clamp(0.0, 1.0)
 }
 
 fn ramp(value: f32, from: f32, to: f32) -> f32 {
@@ -388,6 +396,11 @@ pub struct Island {
     thumb: Option<(String, Option<Thumbnail>)>,
     eq_step: u32,
     eq_running: bool,
+    /// The composition-animated equalizer; `Err` once it failed to build, so
+    /// the island falls back to repainting on a timer.
+    eq_layer: Option<std::result::Result<EqLayer, ()>>,
+    /// Where this paint wants the animated bars (left, middle), if anywhere.
+    eq_at: Option<(f32, f32)>,
     formats: Option<Formats>,
     panel: PanelLayout,
     hot: Option<Hot>,
@@ -412,6 +425,8 @@ pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &IslandConfig, monitor: 
         thumb: None,
         eq_step: 0,
         eq_running: false,
+        eq_layer: None,
+        eq_at: None,
         formats: None,
         panel: PanelLayout::new(monitor.scale),
         hot: None,
@@ -477,7 +492,9 @@ impl Island {
 
     /// Whether the equalizer should be moving.
     fn wants_eq(&self) -> bool {
+        // Only the fallback needs a timer; the composition layer animates itself.
         self.animate_eq
+            && matches!(self.eq_layer, Some(Err(())))
             && !self.suspended
             && !self.hovered
             && self.notice.is_none()
@@ -704,7 +721,8 @@ impl View for Island {
             self.formats = build_formats(cx);
         }
         let (w, h) = (cx.width, cx.height);
-        let e = expansion(w, s);
+        // From this content's own compact width, so a pill at rest is fully opaque.
+        let e = expansion_from(w, compact_size(self.content()).0, s);
         let radius = (h / 2.0).min(lerp(h / 2.0, EXPANDED_RADIUS * s, e));
 
         let pill = rect(0.0, 0.0, w, h);
@@ -718,6 +736,7 @@ impl View for Island {
         let Some(formats) = self.formats.take() else {
             return;
         };
+        self.eq_at = None;
         let small_alpha = 1.0 - ramp(e, 0.0, 0.45);
         let panel_alpha = ramp(e, 0.6, 1.0);
         if small_alpha > 0.0 {
@@ -729,6 +748,7 @@ impl View for Island {
         if panel_alpha > 0.0 {
             self.paint_panel(cx, &formats, panel_alpha);
         }
+        self.sync_eq_layer(cx);
         self.sync_thumbnail(panel_alpha);
         self.formats = Some(formats);
     }
@@ -908,6 +928,30 @@ impl Island {
         }
     }
 
+    /// Puts the composition equalizer where this paint asked for it, building
+    /// it on first use, or takes it off the window.
+    fn sync_eq_layer(&mut self, cx: &PaintCx) {
+        let s = cx.scale;
+        match (self.eq_at, &mut self.eq_layer) {
+            (Some((x, mid)), Some(Ok(layer))) => layer.place(cx.gfx, x, mid, 12.0 * s),
+            (Some((x, mid)), slot @ None) => {
+                match EqLayer::new(cx.gfx, cx.root, 2.5 * s, 2.0 * s, 12.0 * s, rgba(255, 255, 255, 0.9)) {
+                    Ok(mut layer) => {
+                        layer.place(cx.gfx, x, mid, 12.0 * s);
+                        *slot = Some(Ok(layer));
+                    }
+                    Err(err) => {
+                        log::warn!("animated equalizer unavailable, repainting instead: {err}");
+                        *slot = Some(Err(()));
+                        self.schedule();
+                    }
+                }
+            }
+            (None, Some(Ok(layer))) => layer.detach(cx.gfx),
+            _ => {}
+        }
+    }
+
     fn paint_compact(&mut self, cx: &PaintCx, formats: &Formats, alpha: f32) {
         let s = cx.scale;
         let (w, h) = (cx.width, cx.height);
@@ -926,18 +970,26 @@ impl Island {
         if matches!(content, Content::Media { .. }) {
             // Equalizer: four bars, still when paused.
             let playing = self.media.as_ref().is_some_and(|m| m.playing);
-            let heights = match (playing, self.animate_eq) {
-                (true, true) => equalizer(self.eq_step),
-                // Still but clearly "playing": staggered bars, bright.
-                (true, false) => [0.55, 0.95, 0.4, 0.75],
-                (false, _) => [0.25; 4],
-            };
             let (bar_w, gap, max_h) = (2.5 * s, 2.0 * s, 12.0 * s);
             let total = 4.0 * bar_w + 3.0 * gap;
             let x0 = if matches!(content, Content::Media { timer: true }) { left + 4.0 * s } else { right - total };
+            // Fully compact and playing: the composition layer draws the moving
+            // bars (it cannot fade, so it waits until the island has settled).
+            let layered = playing && self.animate_eq && alpha >= 1.0 && !matches!(self.eq_layer, Some(Err(())));
+            if layered {
+                self.eq_at = Some((x0, mid));
+            }
+            let heights = match (playing, self.animate_eq) {
+                _ if layered => [0.0; 4],
+                // Only the timer fallback animates by repainting.
+                (true, true) if matches!(self.eq_layer, Some(Err(()))) => equalizer(self.eq_step),
+                // Still but clearly "playing": staggered bars, bright.
+                (true, _) => [0.55, 0.95, 0.4, 0.75],
+                (false, _) => [0.25; 4],
+            };
             let color = if playing { rgba(255, 255, 255, 0.9 * alpha) } else { rgba(255, 255, 255, 0.4 * alpha) };
             if let Ok(brush) = cx.gfx.brush(color) {
-                for (i, height) in heights.iter().enumerate() {
+                for (i, height) in heights.iter().enumerate().filter(|(_, h)| **h > 0.0) {
                     let x = x0 + i as f32 * (bar_w + gap);
                     let bh = max_h * height;
                     unsafe { cx.dc.FillRoundedRectangle(&rounded(rect(x, mid - bh / 2.0, x + bar_w, mid + bh / 2.0), bar_w / 2.0), &brush) };
