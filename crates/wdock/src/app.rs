@@ -47,6 +47,7 @@ use crate::platform::winevents::{self, WM_APP_WINEVENTS};
 use crate::platform::wininfo;
 use crate::services::apps_index::{self, WM_APP_INDEX};
 use crate::services::media::{self, WM_APP_MEDIA};
+use crate::services::privacy::{self, WM_APP_PRIVACY};
 use crate::services::{self, WM_APP_STATUS};
 use crate::ui::backdrop::Corners;
 use crate::ui::bar::{self, BarSpec};
@@ -471,6 +472,7 @@ pub fn run(mode: Mode) -> Result<()> {
     apps_index::start(hwnd);
     if config.island.enabled {
         media::start(hwnd);
+        privacy::start(hwnd);
     }
     model.borrow_mut().scan();
 
@@ -493,6 +495,7 @@ pub fn run(mode: Mode) -> Result<()> {
     popup::set_context(None);
     services::stop();
     media::stop();
+    privacy::stop();
     apps_index::stop();
     SHELL.with_borrow_mut(|shell| {
         if let Some(mut shell) = shell.take() {
@@ -688,6 +691,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             LRESULT(0)
         }
         WM_APP_MEDIA => {
+            island::media_changed();
+            LRESULT(0)
+        }
+        WM_APP_PRIVACY => {
             island::media_changed();
             LRESULT(0)
         }
