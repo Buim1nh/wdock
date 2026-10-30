@@ -2,6 +2,8 @@
 //! (keyboard keys, other apps) arrive through COM callbacks on a system
 //! thread; those only post a message to the UI thread.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{HWND, LPARAM, PROPERTYKEY, WPARAM};
 use windows::Win32::Media::Audio::Endpoints::{
@@ -22,12 +24,21 @@ fn post(target: isize, kind: usize) {
     let _ = unsafe { PostMessageW(Some(HWND(target as *mut _)), WM_APP_STATUS, WPARAM(kind), LPARAM(0)) };
 }
 
+/// A `KIND_AUDIO` message is already queued. A burst of notifications (a
+/// held key, a knob) then costs one message and one read of the final value.
+pub static VOLUME_PENDING: AtomicBool = AtomicBool::new(false);
+
 #[implement(IAudioEndpointVolumeCallback)]
 struct VolumeCallback(isize);
 
 impl IAudioEndpointVolumeCallback_Impl for VolumeCallback_Impl {
-    fn OnNotify(&self, _data: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<()> {
-        post(self.0, KIND_AUDIO);
+    fn OnNotify(&self, data: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<()> {
+        if let Some(data) = unsafe { data.as_ref() } {
+            log::debug!("endpoint volume notify: level={:.3} muted={}", data.fMasterVolume, data.bMuted.as_bool());
+        }
+        if !VOLUME_PENDING.swap(true, Ordering::AcqRel) {
+            post(self.0, KIND_AUDIO);
+        }
         Ok(())
     }
 }

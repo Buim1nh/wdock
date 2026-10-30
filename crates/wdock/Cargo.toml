@@ -17,6 +17,7 @@ toml = { version = "1", default-features = false, features = ["parse", "serde"] 
 workspace = true
 features = [
     "Foundation",
+    "Win32_Devices_Display",
     "Media_Control",
     "Storage_Streams",
     "Win32_Devices_FunctionDiscovery",

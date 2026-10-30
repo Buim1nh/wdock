@@ -380,7 +380,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 !suspended
             }
             WM_KEYDOWN => state.view.key_down(wparam.0 as u16),
-            // Keys pressed while Alt is held (the switcher) arrive as system keys.
+            // Keys pressed while Alt is held arrive as system keys.
             WM_SYSKEYDOWN => {
                 if !state.view.key_down(wparam.0 as u16) {
                     return DefWindowProcW(hwnd, msg, wparam, lparam);

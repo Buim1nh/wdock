@@ -19,6 +19,7 @@ use crate::ui::backdrop::DWM_CORNER_RADIUS;
 use crate::ui::bar::{self, Button, PaintCx, View};
 use crate::ui::gfx::{rect, rounded};
 use crate::ui::glyphs;
+use crate::ui::popup;
 use crate::ui::popups::wifi_panel::{Outcome, WifiHit, WifiPanel};
 use crate::ui::text;
 
@@ -43,10 +44,13 @@ enum Hit {
     Volume,
     OutputToggle,
     Output(usize),
-    Brightness,
+    /// The slider for `status.displays[i]`.
+    Brightness(usize),
     Battery,
     Session(SessionAction),
     Settings,
+    /// wdock's own settings, next to Windows' Settings button.
+    WdockSettings,
 }
 
 const POWER_ROW: [(Hit, &str, &str); 6] = [
@@ -137,13 +141,16 @@ impl QuickSettingsView {
                 y += GAP * s;
             }
         }
-        if self.status.brightness.is_some() {
-            slider(Hit::Brightness, &mut y, &mut self.targets, &mut self.tracks);
+        for i in 0..self.status.displays.len() {
+            slider(Hit::Brightness(i), &mut y, &mut self.targets, &mut self.tracks);
         }
         if self.status.battery.is_some() {
             self.targets.push((Hit::Battery, rect(left, y, right, y + 36.0 * s)));
             y += (36.0 + GAP) * s;
         }
+
+        self.targets.push((Hit::WdockSettings, rect(left, y, right, y + 30.0 * s)));
+        y += (30.0 + GAP) * s;
 
         y += 4.0 * s;
         let count = POWER_ROW.len() as f32;
@@ -172,7 +179,7 @@ impl QuickSettingsView {
         }
         match slider {
             Hit::Volume => self.status.volume.map_or(0.0, |v| if v.muted { 0.0 } else { v.level }),
-            Hit::Brightness => self.status.brightness.map_or(0.0, |b| f32::from(b) / 100.0),
+            Hit::Brightness(i) => self.status.displays.get(i).map_or(0.0, |d| f32::from(d.percent) / 100.0),
             _ => 0.0,
         }
     }
@@ -186,10 +193,17 @@ impl QuickSettingsView {
         };
         let inset = 7.0 * self.scale;
         drag.value = ((x - track.left - inset) / (track.right - track.left - inset * 2.0)).clamp(0.0, 1.0);
-        match drag.slider {
-            Hit::Volume => services::set_volume(drag.value),
-            Hit::Brightness => services::set_brightness((drag.value * 100.0).round() as u8),
+        let (slider, value) = (drag.slider, drag.value);
+        match slider {
+            Hit::Volume => services::set_volume(value),
+            Hit::Brightness(i) => self.write_brightness(i, value, false),
             _ => {}
+        }
+    }
+
+    fn write_brightness(&self, index: usize, value: f32, last: bool) {
+        if let Some(display) = self.status.displays.get(index) {
+            services::set_brightness(display.id, (value * 100.0).round() as u8, last);
         }
     }
 
@@ -314,11 +328,14 @@ impl View for QuickSettingsView {
                         text::draw(cx, glyphs::CHECK, &icon, rect(r.right - 26.0 * s, r.top, r.right, r.bottom), theme.accent);
                     }
                 }
-                Hit::Volume | Hit::Brightness => {
-                    let label = if hit == Hit::Volume { "Sound" } else { "Display" };
+                Hit::Volume | Hit::Brightness(_) => {
+                    let label = match hit {
+                        Hit::Brightness(i) => self.status.displays.get(i).map_or("Display", |d| d.name.as_str()),
+                        _ => "Sound",
+                    };
                     let label_rect = rect(r.left - (ICON_BUTTON + 10.0) * s, r.top - LABEL * s, r.right, r.top);
                     text::draw(cx, label, &bold, label_rect, theme.text);
-                    if hit == Hit::Brightness {
+                    if matches!(hit, Hit::Brightness(_)) {
                         let button = rect(label_rect.left, r.top + 1.0 * s, label_rect.left + ICON_BUTTON * s, r.bottom - 1.0 * s);
                         text::draw(cx, glyphs::BRIGHTNESS, &icon, button, theme.text);
                     }
@@ -347,6 +364,11 @@ impl View for QuickSettingsView {
                         let detail = format!("{}% · {state}", battery.percent);
                         text::draw(cx, &detail, &right_aligned, rect(r.left + pad, r.top, r.right - pad, r.bottom), theme.text_dim);
                     }
+                }
+                Hit::WdockSettings => {
+                    fill(r, 8.0 * s, plate_color(hit));
+                    text::draw(cx, glyphs::SETTINGS, &icon, rect(r.left + 8.0 * s, r.top, r.left + 34.0 * s, r.bottom), theme.text);
+                    text::draw(cx, "wdock settings", &normal, rect(r.left + 34.0 * s, r.top, r.right - 8.0 * s, r.bottom), theme.text);
                 }
                 Hit::Session(_) | Hit::Settings => {
                     let armed = matches!(hit, Hit::Session(a) if self.confirm == Some(a));
@@ -384,7 +406,7 @@ impl View for QuickSettingsView {
         if button != Button::Left {
             return false;
         }
-        let Some(slider @ (Hit::Volume | Hit::Brightness)) = self.hit(x, y) else {
+        let Some(slider @ (Hit::Volume | Hit::Brightness(_))) = self.hit(x, y) else {
             return false;
         };
         unsafe { SetCapture(self.hwnd) };
@@ -394,8 +416,11 @@ impl View for QuickSettingsView {
     }
 
     fn mouse_up(&mut self, x: f32, y: f32, button: Button) -> bool {
-        if self.drag.take().is_some() {
+        if let Some(drag) = self.drag.take() {
             let _ = unsafe { ReleaseCapture() };
+            if let Hit::Brightness(i) = drag.slider {
+                self.write_brightness(i, drag.value, true);
+            }
             return true;
         }
         if button != Button::Left {
@@ -444,6 +469,7 @@ impl View for QuickSettingsView {
                 launch::open("ms-settings:");
                 self.close();
             }
+            Some(Hit::WdockSettings) => popup::toggle_settings(self.anchor, self.scale),
             Some(Hit::Session(action)) => {
                 if action.needs_confirmation() && self.confirm != Some(action) {
                     self.confirm = Some(action);
@@ -469,9 +495,9 @@ impl View for QuickSettingsView {
         }
         match self.hit(x, y) {
             Some(Hit::Volume | Hit::Mute) => services::nudge_volume(step),
-            Some(Hit::Brightness) => {
-                let current = self.slider_value(Hit::Brightness);
-                services::set_brightness(((current + step).clamp(0.0, 1.0) * 100.0).round() as u8);
+            Some(Hit::Brightness(i)) => {
+                let current = self.slider_value(Hit::Brightness(i));
+                self.write_brightness(i, (current + step).clamp(0.0, 1.0), true);
             }
             _ => return false,
         }

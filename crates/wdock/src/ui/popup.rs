@@ -1,6 +1,5 @@
 //! Transient windows above the bars: tooltip, tray overflow, balloon,
-//! quick settings, calendar, the launcher, the Alt+Tab switcher, the
-//! overview, dock context menus and dock window previews.
+//! quick settings, calendar, the launcher, the overview, dock context menus and dock window previews.
 //! At most one of each exists. The shell installs the graphics context on
 //! every rebuild, which also closes whatever was open.
 
@@ -21,9 +20,9 @@ use crate::ui::gfx::Gfx;
 use crate::ui::popups::{
     balloon::BalloonView, calendar::CalendarView, launcher::LauncherView, menu::MenuItem, menu::MenuView,
     overflow::OverflowView, overview::OverviewView, preview::PreviewView, quick_settings::QuickSettingsView,
-    switcher::SwitcherView, tooltip::TooltipView,
+    settings::SettingsView, tooltip::TooltipView,
 };
-use crate::ui::popups::{preview, switcher};
+use crate::ui::popups::preview;
 use crate::ui::theme::Theme;
 
 pub struct PopupContext {
@@ -44,19 +43,20 @@ thread_local! {
     static CALENDAR: Cell<Option<HWND>> = const { Cell::new(None) };
     static LAUNCHER: Cell<Option<HWND>> = const { Cell::new(None) };
     static BALLOON: Cell<Option<(HWND, u64)>> = const { Cell::new(None) };
-    static SWITCHER: Cell<Option<HWND>> = const { Cell::new(None) };
     static OVERVIEW: Cell<Option<HWND>> = const { Cell::new(None) };
     static MENU: Cell<Option<HWND>> = const { Cell::new(None) };
     static PREVIEW: Cell<Option<HWND>> = const { Cell::new(None) };
     /// Windows shown by the open preview, so hovering the same icon keeps it.
     static PREVIEW_OF: RefCell<Vec<HWND>> = const { RefCell::new(Vec::new()) };
     static GAME_MODE: Cell<bool> = const { Cell::new(false) };
-    static SHORTCUTS: Cell<Option<HWND>> = const { Cell::new(None) };
+    static SETTINGS: Cell<Option<HWND>> = const { Cell::new(None) };
+    /// Where the settings panel is anchored, so a reload can reopen it.
+    static SETTINGS_AT: Cell<Option<(RECT, f32)>> = const { Cell::new(None) };
 }
 
 /// Slots closed whenever another panel opens.
 fn panels() -> [&'static std::thread::LocalKey<Cell<Option<HWND>>>; 8] {
-    [&OVERFLOW, &QUICK, &CALENDAR, &LAUNCHER, &SWITCHER, &OVERVIEW, &MENU, &PREVIEW]
+    [&OVERFLOW, &QUICK, &CALENDAR, &LAUNCHER, &OVERVIEW, &MENU, &PREVIEW, &SETTINGS]
 }
 
 fn context() -> Option<Rc<PopupContext>> {
@@ -80,11 +80,10 @@ pub fn set_context(ctx: Option<PopupContext>) {
     destroy(&QUICK);
     destroy(&CALENDAR);
     destroy(&LAUNCHER);
-    destroy(&SWITCHER);
     destroy(&OVERVIEW);
     destroy(&MENU);
     destroy(&PREVIEW);
-    destroy(&SHORTCUTS);
+    destroy(&SETTINGS);
     hide_balloon();
     CTX.set(ctx.map(Rc::new));
 }
@@ -98,7 +97,7 @@ fn open(spec: BarSpec, view: Box<dyn View>) -> Option<HWND> {
 
 /// Forwards a model/tray change to open popups.
 pub fn notify() {
-    let open = [OVERFLOW.get(), QUICK.get(), BALLOON.get().map(|(h, _)| h), SWITCHER.get(), OVERVIEW.get(), PREVIEW.get()];
+    let open = [OVERFLOW.get(), QUICK.get(), BALLOON.get().map(|(h, _)| h), OVERVIEW.get(), PREVIEW.get()];
     for hwnd in open.into_iter().flatten() {
         if alive(hwnd) {
             bar::notify_model_changed(hwnd);
@@ -195,6 +194,17 @@ pub fn toggle_quick_settings(anchor: RECT, scale: f32) {
     toggle_panel(&QUICK, scale, || Box::new(QuickSettingsView::new(anchor, scale)));
 }
 
+/// wdock's settings, under the status icons like the quick-settings panel.
+pub fn toggle_settings(anchor: RECT, scale: f32) {
+    SETTINGS_AT.set(Some((anchor, scale)));
+    toggle_panel(&SETTINGS, scale, || Box::new(SettingsView::new(anchor, scale)));
+}
+
+/// Where the settings panel is open, if it is; a reload reopens it there.
+pub fn settings_reopen() -> Option<(RECT, f32)> {
+    SETTINGS.get().is_some_and(alive).then(|| SETTINGS_AT.get()).flatten()
+}
+
 /// Month calendar under the clock.
 pub fn toggle_calendar(anchor: RECT, scale: f32) {
     toggle_panel(&CALENDAR, scale, || Box::new(CalendarView::new(anchor, scale)));
@@ -217,36 +227,6 @@ pub fn toggle_launcher() {
     }
     let scale = dpi_x as f32 / 96.0;
     toggle_panel(&LAUNCHER, scale, || Box::new(LauncherView::new(info.rcMonitor, scale)));
-}
-
-/// Shows a notification card under the primary top bar, replacing any other.
-/// The shortcut cheat sheet on the cursor's monitor, or closes it if open.
-/// It is a widget rather than a panel: other popups leave it alone.
-pub fn toggle_shortcuts(groups: Vec<crate::ui::popups::shortcuts::Group>) {
-    if SHORTCUTS.get().is_some_and(alive) {
-        destroy(&SHORTCUTS);
-        return;
-    }
-    let Some(ctx) = context() else {
-        return;
-    };
-    let monitor = cursor_monitor(&ctx);
-    let top = monitor.rect.top + (ctx.topbar_height * monitor.scale).round() as i32;
-    let view = crate::ui::popups::shortcuts::ShortcutsView::new(&ctx.gfx, groups, monitor.rect, top, monitor.scale);
-    // Where the user last dragged it, if that is still on a screen.
-    let view = match crate::ui::popups::shortcuts::saved_position() {
-        Some(origin) => view.moved_to(origin),
-        None => view,
-    };
-    let Some(rect) = view.frame() else {
-        return;
-    };
-    let spec = BarSpec { rect, scale: monitor.scale, corners: Corners::Round, activate: false };
-    SHORTCUTS.set(open(spec, Box::new(view)));
-}
-
-pub fn shortcuts_open() -> bool {
-    SHORTCUTS.get().is_some_and(alive)
 }
 
 /// While a full-screen app is in front, balloons are dropped instead of shown.
@@ -313,32 +293,8 @@ fn cursor_monitor(ctx: &PopupContext) -> Monitor {
     monitors::describe(monitors::under_cursor()).unwrap_or(ctx.primary)
 }
 
-/// Alt+Tab: opens the switcher one step from the current window, or steps
-/// the open one. `step` is +1 for Tab and -1 for Shift+Tab.
-pub fn switcher(step: i32) {
-    if let Some(hwnd) = SWITCHER.get().filter(|&h| alive(h)) {
-        bar::command(hwnd, if step > 0 { switcher::CMD_NEXT } else { switcher::CMD_PREV });
-        return;
-    }
-    let Some(ctx) = context() else {
-        return;
-    };
-    let windows = ctx.model.borrow().switcher_windows();
-    if windows.is_empty() {
-        return;
-    }
-    close_panels();
-    let monitor = cursor_monitor(&ctx);
-    let view = SwitcherView::new(&ctx.gfx, ctx.model.clone(), windows, step, &monitor);
-    let Some(rect) = view.frame() else {
-        return;
-    };
-    let spec = BarSpec { rect, scale: monitor.scale, corners: Corners::Round, activate: true };
-    SWITCHER.set(open(spec, Box::new(view)));
-}
-
-/// Win+Tab: every window of the current workspace on the cursor's monitor,
-/// plus the workspace strip. Opening it again closes it.
+/// Every window of the current workspace on the cursor's monitor, plus the
+/// workspace strip. Opening it again closes it.
 pub fn toggle_overview() {
     if OVERVIEW.get().is_some_and(alive) {
         destroy(&OVERVIEW);
@@ -409,4 +365,8 @@ pub fn preview_leave() {
 
 pub fn preview_open() -> bool {
     PREVIEW.get().is_some_and(alive)
+}
+
+pub fn overview_open() -> bool {
+    OVERVIEW.get().is_some_and(alive)
 }

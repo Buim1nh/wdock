@@ -49,22 +49,13 @@ pinned = [
     'shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel',
 ]
 
-# Shortcuts (Windows keeps its own: Alt+Tab, Win+Tab, Win+Shift+S, ...):
-#   Win+Alt+Space or Ctrl+Alt+Space   launcher
-#   Alt+`  /  Alt+Shift+`             window switcher (release Alt to pick)
-#   Win+`                             overview of the current workspace
-#   Win+Ctrl+Alt+Left/Right, +1..9    switch workspace
-#   Win+Alt+Shift+Left/Right, +1..9   move the active window to a workspace
-#   Win+Alt+/                         show or hide a card listing these
-#   Ctrl+Alt+Shift+Q                  quit wdock (explorer's taskbar returns)
+# wdock has two shortcuts: Win+Alt+Space opens the launcher and
+# Ctrl+Alt+Shift+Q quits wdock (explorer's taskbar returns). Everything else,
+# including the overview and workspaces, is on the top bar.
 
 [workspaces]
 # Workspaces per monitor (1-9).
 count = 4
-
-[switcher]
-# wdock's window switcher on Alt+` (windows of the visible workspaces only).
-enabled = true
 
 [island]
 # A Dynamic Island-style pill at the top centre of every monitor: now playing

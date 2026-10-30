@@ -32,6 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Interface, Result, w};
 
 use crate::model::tray::{Applied, Balloon, TrayEnv, TrayModel};
+use crate::model::tray_hidden;
 use crate::platform::tray_proto::{self, COPYDATA_APPBAR, COPYDATA_ICON_RECT, COPYDATA_TRAY};
 use crate::platform::wininfo;
 
@@ -85,7 +86,9 @@ impl TrayHost {
                 .inspect_err(|err| log::error!("WIC unavailable for tray icons: {err}"))
                 .ok(),
         );
-        TRAY.set(Some(TrayModel::new(TrayEnv { load_icon, exe_of, is_window })));
+        let mut model = TrayModel::new(TrayEnv { load_icon, exe_of, is_window });
+        model.set_hidden(tray_hidden::load());
+        TRAY.set(Some(model));
 
         let instance = unsafe { GetModuleHandleW(None)? };
         let class = WNDCLASSW {

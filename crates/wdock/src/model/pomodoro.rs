@@ -31,6 +31,34 @@ impl Pomodoro {
         Self { work_ms: ms(work_minutes), break_ms: ms(break_minutes), phase: Phase::Work, run: Run::Idle }
     }
 
+    /// Lengths in minutes: (focus, break).
+    pub fn lengths(&self) -> (u32, u32) {
+        ((self.work_ms / 60_000) as u32, (self.break_ms / 60_000) as u32)
+    }
+
+    /// While idle, chooses which phase is shown, edited and started next.
+    pub fn select(&mut self, phase: Phase) {
+        if self.run == Run::Idle {
+            self.phase = phase;
+        }
+    }
+
+    /// Steps the selected phase's length by one notch; only while idle.
+    /// Returns whether the length changed.
+    pub fn step(&mut self, up: bool) -> bool {
+        if self.run != Run::Idle {
+            return false;
+        }
+        let before = self.lengths();
+        let (work, rest) = before;
+        let (work, rest) = match self.phase {
+            Phase::Work => (step_minutes(work, up, WORK_RANGE, WORK_STEP), rest),
+            Phase::Break => (work, step_minutes(rest, up, BREAK_RANGE, BREAK_STEP)),
+        };
+        *self = Self { work_ms: u64::from(work) * 60_000, break_ms: u64::from(rest) * 60_000, ..self.clone() };
+        (work, rest) != before
+    }
+
     pub fn phase(&self) -> Phase {
         self.phase
     }
@@ -121,6 +149,44 @@ impl Pomodoro {
     }
 }
 
+pub const WORK_RANGE: (u32, u32) = (5, 90);
+pub const WORK_STEP: u32 = 5;
+pub const BREAK_RANGE: (u32, u32) = (1, 30);
+pub const BREAK_STEP: u32 = 1;
+
+/// Moves `value` to the next multiple of `step` in the given direction,
+/// kept inside `range`.
+fn step_minutes(value: u32, up: bool, range: (u32, u32), step: u32) -> u32 {
+    let next = if up { (value / step + 1) * step } else { value.div_ceil(step).saturating_sub(1) * step };
+    next.clamp(range.0, range.1)
+}
+
+/// Parses the saved lengths (`work=25` / `break=5` lines), clamped to the
+/// allowed ranges. Missing or garbled values fall back to `default`.
+pub fn parse_saved(text: &str, default: (u32, u32)) -> (u32, u32) {
+    let mut out = default;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Ok(value) = value.trim().parse::<u32>() else {
+            continue;
+        };
+        match key.trim() {
+            "work" => out.0 = value.clamp(WORK_RANGE.0, WORK_RANGE.1),
+            "break" => out.1 = value.clamp(BREAK_RANGE.0, BREAK_RANGE.1),
+            _ => {}
+        }
+    }
+    out
+}
+
+pub fn format_saved(lengths: (u32, u32)) -> String {
+    format!("work={}
+break={}
+", lengths.0, lengths.1)
+}
+
 /// `m:ss` for the expanded island, e.g. `24:05`.
 pub fn clock(ms: u64) -> String {
     let secs = ms.div_ceil(1000);
@@ -193,6 +259,66 @@ mod tests {
     fn tick_delay_hits_minute_boundary() {
         assert_eq!(tick_delay(25 * 60_000), 60_020);
         assert_eq!(tick_delay(24 * 60_000 + 5_000), 5_020);
+    }
+
+    #[test]
+    fn stepping_respects_steps_and_limits() {
+        let mut p = Pomodoro::new(25, 5);
+        assert!(p.step(true));
+        assert_eq!(p.lengths(), (30, 5));
+        assert!(p.step(false) && p.step(false));
+        assert_eq!(p.lengths(), (20, 5));
+        // Off-grid values snap to the grid.
+        let mut odd = Pomodoro::new(7, 5);
+        odd.step(true);
+        assert_eq!(odd.lengths().0, 10);
+        let mut odd = Pomodoro::new(7, 5);
+        odd.step(false);
+        assert_eq!(odd.lengths().0, 5);
+        // Limits.
+        let mut max = Pomodoro::new(90, 5);
+        assert!(!max.step(true));
+        let mut min = Pomodoro::new(5, 5);
+        assert!(!min.step(false));
+        // Break uses single minutes, 1..=30.
+        let mut b = Pomodoro::new(25, 5);
+        b.select(Phase::Break);
+        b.step(true);
+        assert_eq!(b.lengths(), (25, 6));
+        let mut top = Pomodoro::new(25, 30);
+        top.select(Phase::Break);
+        assert!(!top.step(true));
+        let mut one = Pomodoro::new(25, 1);
+        one.select(Phase::Break);
+        assert!(!one.step(false));
+    }
+
+    #[test]
+    fn stepping_only_while_idle() {
+        let mut p = Pomodoro::new(25, 5);
+        p.start(0);
+        assert!(!p.step(true));
+        p.select(Phase::Break);
+        assert_eq!(p.phase(), Phase::Work);
+        p.pause(1_000);
+        assert!(!p.step(true));
+        assert_eq!(p.lengths(), (25, 5));
+        p.reset();
+        p.select(Phase::Break);
+        assert_eq!(p.phase(), Phase::Break);
+        assert_eq!(p.remaining_ms(0), 5 * 60_000);
+    }
+
+    #[test]
+    fn saved_lengths_roundtrip_and_clamp() {
+        assert_eq!(parse_saved(&format_saved((40, 10)), (25, 5)), (40, 10));
+        assert_eq!(parse_saved("work=500
+break=0
+", (25, 5)), (90, 1));
+        assert_eq!(parse_saved("garbage
+work=x
+", (25, 5)), (25, 5));
+        assert_eq!(parse_saved("break=12", (25, 5)), (25, 12));
     }
 
     #[test]

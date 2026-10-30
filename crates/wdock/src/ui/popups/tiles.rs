@@ -1,4 +1,4 @@
-//! Window tiles shared by the switcher, the overview and dock previews: a
+//! Window tiles shared by the overview and dock previews: a
 //! live DWM thumbnail (or the app's icon when there is nothing to show) above
 //! an icon-and-title row.
 
@@ -24,7 +24,6 @@ const INSET: f32 = 8.0;
 pub enum Emphasis {
     None,
     Hot,
-    Selected,
 }
 
 /// Draws an icon bitmap, creating and caching it on first use.
@@ -66,11 +65,6 @@ pub fn paint(
     let s = cx.scale;
     let theme = cx.theme;
     let plate = match emphasis {
-        Emphasis::Selected => {
-            let mut c = theme.accent;
-            c.a = 0.45;
-            Some(c)
-        }
         Emphasis::Hot => Some(theme.hover),
         Emphasis::None => None,
     };

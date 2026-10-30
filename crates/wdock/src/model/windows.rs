@@ -429,10 +429,6 @@ impl WindowModel {
         self.hidden.contains_key(&(hwnd.0 as isize))
     }
 
-    pub fn foreground(&self) -> Option<HWND> {
-        self.foreground
-    }
-
     /// Monitor and workspace of a tracked window.
     pub fn placement(&self, hwnd: HWND) -> Option<(HMONITOR, u8)> {
         self.windows.iter().find(|w| w.hwnd == hwnd).map(|w| (w.monitor, w.workspace))
@@ -453,13 +449,6 @@ impl WindowModel {
     pub fn workspace_windows(&self, monitor: HMONITOR, workspace: u8) -> Vec<HWND> {
         let mut windows: Vec<&TrackedWindow> =
             self.windows.iter().filter(|w| w.monitor == monitor && w.workspace == workspace).collect();
-        windows.sort_by_key(|w| std::cmp::Reverse(w.last_active));
-        windows.into_iter().map(|w| w.hwnd).collect()
-    }
-
-    /// Every window on a visible workspace, most recently active first (Alt+Tab).
-    pub fn switcher_windows(&self) -> Vec<HWND> {
-        let mut windows: Vec<&TrackedWindow> = self.windows.iter().filter(|w| !self.is_hidden(w.hwnd)).collect();
         windows.sort_by_key(|w| std::cmp::Reverse(w.last_active));
         windows.into_iter().map(|w| w.hwnd).collect()
     }
@@ -741,11 +730,9 @@ mod tests {
         assert_eq!(focus, Some(hwnd(3)));
         assert_eq!(model.active_workspace(m), 1);
         assert!(model.is_hidden(hwnd(1)) && model.is_hidden(hwnd(2)) && !model.is_hidden(hwnd(3)));
-        assert_eq!(model.switcher_windows(), vec![hwnd(3)]);
 
         model.switch_workspace(m, 0);
         assert!(!model.is_hidden(hwnd(1)) && model.is_hidden(hwnd(3)));
-        assert_eq!(model.switcher_windows(), vec![hwnd(2), hwnd(1)], "most recent first");
         assert_eq!(model.switch_workspace(m, 0), None, "already showing");
     }
 

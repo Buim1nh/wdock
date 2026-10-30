@@ -10,6 +10,7 @@ pub mod icons;
 pub mod media;
 pub mod network;
 pub mod power;
+pub mod privacy;
 pub mod wifi;
 
 use std::cell::RefCell;
@@ -55,8 +56,11 @@ pub struct SystemStatus {
     pub volume: Option<Volume>,
     pub network: NetState,
     pub battery: Option<Battery>,
-    /// `None` until known, or when the display has no software control.
+    /// Built-in panel level; `None` until known, or without software control.
     pub brightness: Option<u8>,
+    /// Every display whose brightness can be changed (built-in panel first,
+    /// then DDC/CI monitors).
+    pub displays: Vec<brightness::Display>,
     /// Counts default-output-device changes (headphones plugged in, ...).
     pub audio_device: u32,
     /// Counts changes to the set of output devices (added, removed, default moved).
@@ -85,6 +89,7 @@ pub fn start(target: HWND) {
             network: network.state(),
             battery: power::battery(),
             brightness: None,
+            displays: Vec::new(),
             audio_device: 0,
             audio_devices: 0,
         },
@@ -122,11 +127,31 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
                 s.status.volume = s.audio.as_ref().and_then(audio::Audio::state);
                 s.status.audio_device = s.status.audio_device.wrapping_add(1);
             }
-            KIND_AUDIO_LIST => s.status.audio_devices = s.status.audio_devices.wrapping_add(1),
-            KIND_AUDIO => s.status.volume = s.audio.as_ref().and_then(audio::Audio::state),
+            // A device was added, removed or changed state: the endpoint we
+            // listen on may be gone (a USB or Bluetooth device that reconnected
+            // keeps its id but not its registration), so rebind and re-read.
+            KIND_AUDIO_LIST => {
+                s.status.audio_devices = s.status.audio_devices.wrapping_add(1);
+                if let Some(audio) = &mut s.audio {
+                    audio.attach_default();
+                }
+                s.status.volume = s.audio.as_ref().and_then(audio::Audio::state);
+            }
+            KIND_AUDIO => {
+                audio::VOLUME_PENDING.store(false, std::sync::atomic::Ordering::Release);
+                s.status.volume = s.audio.as_ref().and_then(audio::Audio::state);
+                if s.status.volume.is_none()
+                    && let Some(audio) = &mut s.audio
+                {
+                    audio.attach_default();
+                    s.status.volume = audio.state();
+                }
+            }
             KIND_NETWORK => s.status.network = s.network.state(),
             KIND_BRIGHTNESS => {
-                s.status.brightness = (lparam.0 != brightness::UNSUPPORTED).then(|| lparam.0.clamp(0, 100) as u8);
+                s.status.displays = brightness::displays();
+                s.status.brightness =
+                    s.status.displays.iter().find(|d| d.id == brightness::BUILTIN).map(|d| d.percent);
             }
             _ => {}
         }
@@ -156,7 +181,23 @@ pub fn set_default_output(id: &str) {
     }
 }
 
+thread_local! {
+    /// When wdock's own sliders last changed volume or brightness.
+    static OWN_CHANGE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+fn mark_own_change() {
+    OWN_CHANGE.set(Some(std::time::Instant::now()));
+}
+
+/// True shortly after a wdock slider changed volume or brightness, so the
+/// island does not announce a change the user is already looking at.
+pub fn own_change_recent() -> bool {
+    OWN_CHANGE.get().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1500))
+}
+
 pub fn set_volume(level: f32) {
+    mark_own_change();
     with(|s| {
         if let Some(audio) = &s.audio {
             audio.set_level(level);
@@ -165,6 +206,7 @@ pub fn set_volume(level: f32) {
 }
 
 pub fn set_muted(muted: bool) {
+    mark_own_change();
     with(|s| {
         if let Some(audio) = &s.audio {
             audio.set_muted(muted);
@@ -181,6 +223,14 @@ pub fn nudge_volume(delta: f32) {
     });
 }
 
-pub fn set_brightness(percent: u8) {
-    with(|s| s.brightness.set(percent));
+/// Sets a display's brightness (`brightness::Display::id`). While a slider is
+/// dragged pass `last = false`; the final value is always written.
+pub fn set_brightness(id: u32, percent: u8, last: bool) {
+    mark_own_change();
+    with(|s| s.brightness.set(id, percent, last));
+}
+
+/// Looks for displays again (display change, resume). Runs on the worker.
+pub fn refresh_displays() {
+    with(|s| s.brightness.detect());
 }
