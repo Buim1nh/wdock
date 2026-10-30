@@ -39,8 +39,8 @@ const STATUS_SLOT: f32 = 26.0;
 const BATTERY_SLOT: f32 = 58.0;
 const VOLUME_STEP: f32 = 0.02;
 const GLYPH_MENU: &str = "\u{E700}";
-const GLYPH_KEYBOARD: &str = "\u{E765}";
-const SHORTCUTS_WIDTH: f32 = 32.0;
+const GLYPH_OVERVIEW: &str = "\u{E7C4}";
+const OVERVIEW_WIDTH: f32 = 32.0;
 const GLYPH_CHEVRON: &str = "\u{E70D}";
 const PILL_WIDTH: f32 = 22.0;
 const PILL_GAP: f32 = 3.0;
@@ -58,7 +58,7 @@ struct Formats {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Hot {
     Launcher,
-    Shortcuts,
+    Overview,
     Chevron,
     Status,
     Clock,
@@ -77,8 +77,8 @@ pub struct TopBar {
     hwnd: HWND,
     /// Bar height in pixels, as last painted.
     height: f32,
-    /// The shortcut card was open at the last paint (button highlight).
-    shortcuts_shown: bool,
+    /// The overview was open at the last paint (button highlight).
+    overview_shown: bool,
     scale: f32,
     model: Rc<RefCell<WindowModel>>,
     title: String,
@@ -112,7 +112,7 @@ impl TopBar {
         let mut bar = Self {
             hwnd: HWND::default(),
             height: 0.0,
-            shortcuts_shown: false,
+            overview_shown: false,
             scale,
             model,
             title: String::new(),
@@ -177,11 +177,11 @@ impl TopBar {
         unsafe { SetTimer(Some(self.hwnd), TIMER_CLOCK, delay, None) };
     }
 
-    /// The keyboard button that shows the shortcut card, right of the launcher.
-    fn shortcuts_rect(&self, height: f32) -> D2D_RECT_F {
+    /// The button that opens the overview, right of the launcher.
+    fn overview_rect(&self, height: f32) -> D2D_RECT_F {
         let s = self.scale;
         let left = (PADDING_X / 2.0 + LAUNCHER_WIDTH + 2.0) * s;
-        rect(left, 3.0 * s, left + SHORTCUTS_WIDTH * s, height - 3.0 * s)
+        rect(left, 3.0 * s, left + OVERVIEW_WIDTH * s, height - 3.0 * s)
     }
 
     fn launcher_rect(&self, height: f32) -> D2D_RECT_F {
@@ -193,8 +193,8 @@ impl TopBar {
         let inside = |r: D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
         if x < (PADDING_X / 2.0 + LAUNCHER_WIDTH) * self.scale {
             Some(Hot::Launcher)
-        } else if inside(self.shortcuts_rect(self.height)) {
-            Some(Hot::Shortcuts)
+        } else if inside(self.overview_rect(self.height)) {
+            Some(Hot::Overview)
         } else if let Some(i) = self.pills.iter().position(|&r| inside(r)) {
             Some(Hot::Workspace(i as u8))
         } else if self.chevron.is_some_and(inside) {
@@ -375,12 +375,12 @@ impl View for TopBar {
             hover_plate(launcher);
         }
         text::draw(cx, GLYPH_MENU, &formats.icon, launcher, cx.theme.text);
-        let shortcuts = self.shortcuts_rect(h);
-        self.shortcuts_shown = popup::shortcuts_open();
-        if self.hot == Some(Hot::Shortcuts) || self.shortcuts_shown {
-            hover_plate(shortcuts);
+        let overview = self.overview_rect(h);
+        self.overview_shown = popup::overview_open();
+        if self.hot == Some(Hot::Overview) || self.overview_shown {
+            hover_plate(overview);
         }
-        text::draw(cx, GLYPH_KEYBOARD, &formats.icon, shortcuts, cx.theme.text);
+        text::draw(cx, GLYPH_OVERVIEW, &formats.icon, overview, cx.theme.text);
 
         let clock_right = w - PADDING_X * s;
         let (clock_width, _) = text::measure(&cx.gfx.dwrite, &self.clock, &formats.clock, w);
@@ -411,7 +411,7 @@ impl View for TopBar {
         }
 
         // Workspace pills: the active one filled, occupied ones with a dot.
-        let mut pill_x = shortcuts.right + 4.0 * s;
+        let mut pill_x = overview.right + 4.0 * s;
         self.pills.clear();
         for (i, &count) in self.workspaces.1.iter().enumerate() {
             let pill = rect(pill_x, 6.0 * s, pill_x + PILL_WIDTH * s, h - 6.0 * s);
@@ -439,7 +439,7 @@ impl View for TopBar {
             self.pills.push(pill);
         }
 
-        let title_left = if self.pills.is_empty() { shortcuts.right + 6.0 * s } else { pill_x + 8.0 * s };
+        let title_left = if self.pills.is_empty() { overview.right + 6.0 * s } else { pill_x + 8.0 * s };
         let title_right = (tray_left - 12.0 * s).max(title_left);
         text::draw(cx, &self.title, &formats.title, rect(title_left, 0.0, title_right, h), cx.theme.text);
         self.formats = Some(formats);
@@ -454,8 +454,8 @@ impl View for TopBar {
             && with_tray(|tray| tray.prune() || tray.revision() != self.tray_revision).unwrap_or(false);
         let status = services::status();
         let status_changed = self.tray_config.is_some() && std::mem::replace(&mut self.status, status) != self.status;
-        let shortcuts_changed = popup::shortcuts_open() != self.shortcuts_shown;
-        title_changed || workspaces_changed || tray_changed || status_changed || shortcuts_changed
+        let overview_changed = popup::overview_open() != self.overview_shown;
+        title_changed || workspaces_changed || tray_changed || status_changed || overview_changed
     }
 
     fn wheel(&mut self, x: f32, y: f32, delta: i16) -> bool {
@@ -486,7 +486,7 @@ impl View for TopBar {
         }
         match (self.hot_at(x, y), button) {
             (Some(Hot::Launcher), Button::Left) => popup::toggle_launcher(),
-            (Some(Hot::Shortcuts), Button::Left) => crate::app::toggle_shortcuts(),
+            (Some(Hot::Overview), Button::Left) => popup::toggle_overview(),
             // The active pill opens the overview; another one switches to it.
             (Some(Hot::Workspace(ws)), Button::Left) if ws == self.workspaces.0 => popup::toggle_overview(),
             (Some(Hot::Workspace(ws)), Button::Left) => {

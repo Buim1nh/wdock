@@ -10,10 +10,12 @@ use windows::Win32::Graphics::Direct2D::{D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CU
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 use crate::model::tray::TrayModel;
+use crate::model::tray_hidden::{self, exe_name};
 use crate::platform::tray_host::{self, TrayInput, with_tray};
 use crate::ui::bar::{self, Button, PaintCx};
 use crate::ui::gfx::{rect, rounded};
 use crate::ui::popup;
+use crate::ui::popups::menu::MenuItem;
 
 pub const TIMER_TIP: usize = 50;
 const TIP_DELAY_MS: u32 = 450;
@@ -154,10 +156,34 @@ impl TrayStrip {
             return false;
         };
         if pressed_button == button && self.hit(x, y) == Some(id) {
-            let input = if button == Button::Left { TrayInput::LeftUp } else { TrayInput::RightUp };
-            tray_host::send(id, input, self.anchor(id));
+            if button == Button::Left {
+                tray_host::send(id, TrayInput::LeftUp, self.anchor(id));
+            } else {
+                self.show_menu(id);
+            }
         }
         true
+    }
+
+    /// Right-click: wdock's menu for the icon. Its last item hands the click on
+    /// to the app, which then shows its own menu.
+    fn show_menu(&self, id: u64) {
+        let Some(Some((name, hidden))) = with_tray(|tray| {
+            tray.icon(id).map(|icon| {
+                let name = if icon.tip.is_empty() { exe_name(&icon.exe).to_owned() } else { icon.tip.clone() };
+                (name, tray.hidden_by_user(icon))
+            })
+        }) else {
+            return;
+        };
+        let anchor = self.anchor(id);
+        let toggle = if hidden { "Show on top bar" } else { "Hide from top bar" };
+        let items = vec![
+            MenuItem::Header(name),
+            MenuItem::action(toggle, move || toggle_on_top_bar(id)),
+            MenuItem::action("Open the app's menu", move || tray_host::send(id, TrayInput::RightUp, anchor)),
+        ];
+        popup::show_menu(items, anchor, self.scale);
     }
 
     pub fn double_click(&mut self, x: f32, y: f32, button: Button) -> bool {
@@ -196,6 +222,14 @@ impl TrayStrip {
         self.tip_open = Some(hover);
         false
     }
+}
+
+/// Puts an icon on the top bar or back there, and remembers the choice.
+fn toggle_on_top_bar(id: u64) {
+    if let Some(Some(apps)) = with_tray(|tray| tray.toggle_hidden(id)) {
+        tray_hidden::save(&apps);
+    }
+    crate::app::notify_model();
 }
 
 fn to_screen(origin: RECT, slot: D2D_RECT_F) -> RECT {

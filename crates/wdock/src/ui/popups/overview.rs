@@ -1,7 +1,7 @@
-//! Overview (Win+Tab): every window of the current workspace on one monitor,
+//! Overview (top bar button): every window of the current workspace on one monitor,
 //! laid out as live thumbnails, under a strip of that monitor's workspaces.
 //! Click a window to switch to it, a workspace to show it, drag a window onto
-//! a workspace to move it there. Esc, Win+Tab or a click on empty space closes.
+//! a workspace to move it there. Esc, the button again or a click on empty space closes.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

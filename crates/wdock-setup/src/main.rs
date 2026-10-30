@@ -929,7 +929,7 @@ fn finish_install(result: Result<String, String>) {
                 let _ = EnableWindow(install, true);
                 let _ = ShowWindow(cancel, windows::Win32::UI::WindowsAndMessaging::SW_HIDE);
             }
-            let tip = "Win+Alt+/ shows wdock's shortcuts. Change these options later by running this setup again.";
+            let tip = "Win+Alt+Space opens wdock's launcher. Change these options later by running this setup again.";
             let _ = hwnd;
             message(&format!("{done}\n\n{tip}"), MB_ICONINFORMATION);
         }

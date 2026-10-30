@@ -2,9 +2,9 @@
 //! every bar.
 //!
 //! wdock runs on top of explorer (see `explorer`): explorer stays the real
-//! shell with its taskbar hidden, wdock provides the top bar, dock, tray and
-//! its own shortcuts, all registered with `RegisterHotKey` on combinations
-//! explorer does not use.
+//! shell with its taskbar hidden, wdock provides the top bar, dock and tray.
+//! Its only shortcuts are the launcher and the emergency quit, registered with
+//! `RegisterHotKey` on combinations explorer does not use.
 //!
 //! Bars are cheap to recreate, so any change to monitors, DPI, theme or the
 //! GPU device simply rebuilds all of them (debounced) from the current config.
@@ -22,8 +22,8 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey, UnregisterHotKey,
-    VK_LEFT, VK_OEM_2, VK_OEM_3, VK_Q, VK_RIGHT, VK_SPACE,
+    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey, UnregisterHotKey,
+    VK_Q, VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DeregisterShellHookWindow, DestroyWindow, DispatchMessageW,
@@ -54,25 +54,12 @@ use crate::ui::dock;
 use crate::ui::gfx::Gfx;
 use crate::ui::island;
 use crate::ui::popup::{self, PopupContext};
-use crate::ui::popups::shortcuts::Group;
 use crate::ui::theme::Theme;
 use crate::ui::topbar::TopBar;
 
 /// Ctrl+Alt+Shift+Q always quits wdock, even when the UI is broken.
 const HOTKEY_EMERGENCY_EXIT: i32 = 1;
 const HOTKEY_LAUNCHER: i32 = 2;
-const HOTKEY_LAUNCHER_ALT: i32 = 3;
-const HOTKEY_SWITCHER: i32 = 4;
-const HOTKEY_SWITCHER_BACK: i32 = 5;
-const HOTKEY_OVERVIEW: i32 = 6;
-const HOTKEY_WORKSPACE_PREV: i32 = 7;
-const HOTKEY_WORKSPACE_NEXT: i32 = 8;
-const HOTKEY_MOVE_PREV: i32 = 9;
-const HOTKEY_MOVE_NEXT: i32 = 10;
-const HOTKEY_SHORTCUTS: i32 = 11;
-/// + n for workspace n (1-9).
-const HOTKEY_WORKSPACE_BASE: i32 = 110;
-const HOTKEY_MOVE_BASE: i32 = 120;
 
 const WM_APP_REBUILD: u32 = WM_APP + 1;
 /// The window model changed outside a WinEvent batch (workspace switch, pinning).
@@ -118,11 +105,6 @@ fn post_main(msg: u32) {
 /// Repaints every bar and popup after a model change made outside WinEvents.
 pub fn notify_model() {
     post_main(WM_APP_NOTIFY);
-}
-
-/// Shows or hides the shortcut card, as Win+Alt+/ does (top bar button).
-pub fn toggle_shortcuts() {
-    let _ = unsafe { PostMessageW(Some(main_hwnd()), WM_HOTKEY, WPARAM(HOTKEY_SHORTCUTS as usize), LPARAM(0)) };
 }
 
 /// Checks the bars' reserved strips shortly (explorer applies them asynchronously).
@@ -324,84 +306,6 @@ impl Shell {
         }
         popup::notify();
     }
-
-    /// Workspace shortcuts act on the monitor of the active window, else the cursor's.
-    fn target_monitor(&self) -> HMONITOR {
-        let model = self.model.borrow();
-        match model.foreground().and_then(|fg| model.placement(fg)) {
-            Some((monitor, _)) => monitor,
-            None => monitors::under_cursor(),
-        }
-    }
-
-    fn switch_workspace(&self, target: WorkspaceTarget) {
-        let monitor = self.target_monitor();
-        let mut model = self.model.borrow_mut();
-        let workspace = target.resolve(model.active_workspace(monitor), model.workspace_count());
-        let focus = model.switch_workspace(monitor, workspace);
-        drop(model);
-        if let Some(hwnd) = focus {
-            focus_later(hwnd);
-        }
-        self.notify_bars();
-    }
-
-    /// Moves the active window to another workspace and follows it there.
-    fn move_foreground(&self, target: WorkspaceTarget) {
-        let mut model = self.model.borrow_mut();
-        let Some(hwnd) = model.foreground() else {
-            return;
-        };
-        let Some((monitor, current)) = model.placement(hwnd) else {
-            return;
-        };
-        let workspace = target.resolve(current, model.workspace_count());
-        if model.move_window(hwnd, workspace) {
-            model.switch_workspace(monitor, workspace);
-            drop(model);
-            focus_later(hwnd);
-            self.notify_bars();
-        }
-    }
-
-    fn hotkey(&mut self, id: i32) {
-        match id {
-            HOTKEY_SWITCHER => popup::switcher(1),
-            HOTKEY_SWITCHER_BACK => popup::switcher(-1),
-            HOTKEY_OVERVIEW => popup::toggle_overview(),
-            HOTKEY_SHORTCUTS => {
-                popup::toggle_shortcuts(shortcut_groups(&self.config));
-                self.notify_bars();
-            }
-            HOTKEY_WORKSPACE_PREV => self.switch_workspace(WorkspaceTarget::Previous),
-            HOTKEY_WORKSPACE_NEXT => self.switch_workspace(WorkspaceTarget::Next),
-            HOTKEY_MOVE_PREV => self.move_foreground(WorkspaceTarget::Previous),
-            HOTKEY_MOVE_NEXT => self.move_foreground(WorkspaceTarget::Next),
-            _ if id > HOTKEY_MOVE_BASE => self.move_foreground(WorkspaceTarget::Index((id - HOTKEY_MOVE_BASE - 1) as u8)),
-            _ if id > HOTKEY_WORKSPACE_BASE => {
-                self.switch_workspace(WorkspaceTarget::Index((id - HOTKEY_WORKSPACE_BASE - 1) as u8))
-            }
-            _ => {}
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum WorkspaceTarget {
-    Index(u8),
-    Previous,
-    Next,
-}
-
-impl WorkspaceTarget {
-    /// Previous/next stop at the ends rather than wrapping, like macOS.
-    fn resolve(self, current: u8, count: u8) -> u8 {
-        match self {
-            Self::Index(n) => n.min(count - 1),
-            Self::Previous => current.saturating_sub(1),
-            Self::Next => (current + 1).min(count - 1),
-        }
-    }
 }
 
 fn in_scope(scope: MonitorScope, monitor: &Monitor) -> bool {
@@ -445,7 +349,7 @@ pub fn run(mode: Mode) -> Result<()> {
     }
 
     let config = config::load();
-    register_hotkeys(hwnd, &config)?;
+    register_hotkeys(hwnd)?;
     window_model::restore_orphans();
     let max_scale = monitors::enumerate().iter().map(|m| m.scale).fold(1.0, f32::max);
     let pinned = pins::load().unwrap_or_else(|| config.dock.pinned.clone());
@@ -507,95 +411,20 @@ pub fn run(mode: Mode) -> Result<()> {
     Ok(())
 }
 
-/// One shortcut: id, modifiers, virtual key, name for the log.
-type Hotkey = (i32, HOT_KEY_MODIFIERS, u32, String);
-
-/// wdock's shortcuts, chosen not to collide with explorer's (Alt+Tab,
-/// Win+Tab, Ctrl+Win+arrows, Win+Alt+n... stay Windows'). See default_config.toml.
-fn hotkeys(config: &Config) -> Vec<Hotkey> {
-    let once = MOD_NOREPEAT;
-    let mut keys: Vec<Hotkey> = vec![
-        (HOTKEY_LAUNCHER, MOD_WIN | MOD_ALT | once, VK_SPACE.0.into(), "Win+Alt+Space".into()),
-        (HOTKEY_LAUNCHER_ALT, MOD_CONTROL | MOD_ALT | once, VK_SPACE.0.into(), "Ctrl+Alt+Space".into()),
-        (HOTKEY_OVERVIEW, MOD_WIN | once, VK_OEM_3.0.into(), "Win+`".into()),
-        (HOTKEY_SHORTCUTS, MOD_WIN | MOD_ALT | once, VK_OEM_2.0.into(), "Win+Alt+/".into()),
-    ];
-    if config.switcher.enabled {
-        // No MOD_NOREPEAT: holding the key keeps stepping.
-        keys.push((HOTKEY_SWITCHER, MOD_ALT, VK_OEM_3.0.into(), "Alt+`".into()));
-        keys.push((HOTKEY_SWITCHER_BACK, MOD_ALT | MOD_SHIFT, VK_OEM_3.0.into(), "Alt+Shift+`".into()));
-    }
-    if config.workspaces.count > 1 {
-        let switch = MOD_WIN | MOD_CONTROL | MOD_ALT | once;
-        let carry = MOD_WIN | MOD_ALT | MOD_SHIFT | once;
-        keys.push((HOTKEY_WORKSPACE_PREV, switch, VK_LEFT.0.into(), "Win+Ctrl+Alt+Left".into()));
-        keys.push((HOTKEY_WORKSPACE_NEXT, switch, VK_RIGHT.0.into(), "Win+Ctrl+Alt+Right".into()));
-        keys.push((HOTKEY_MOVE_PREV, carry, VK_LEFT.0.into(), "Win+Alt+Shift+Left".into()));
-        keys.push((HOTKEY_MOVE_NEXT, carry, VK_RIGHT.0.into(), "Win+Alt+Shift+Right".into()));
-        for n in 1..=config.workspaces.count.min(9) as i32 {
-            let digit = '0' as u32 + n as u32;
-            keys.push((HOTKEY_WORKSPACE_BASE + n, switch, digit, format!("Win+Ctrl+Alt+{n}")));
-            keys.push((HOTKEY_MOVE_BASE + n, carry, digit, format!("Win+Alt+Shift+{n}")));
-        }
-    }
-    keys
-}
-
-/// The cheat sheet's contents: wdock's shortcuts as configured, then the
-/// Windows ones that still work underneath.
-fn shortcut_groups(config: &Config) -> Vec<Group> {
-    let mut ours = vec![("Win+Alt+Space".to_owned(), "Launcher")];
-    if config.switcher.enabled {
-        ours.push(("Alt+`".to_owned(), "Switch windows"));
-    }
-    ours.push(("Win+`".to_owned(), "Overview"));
-    if config.workspaces.count > 1 {
-        let n = config.workspaces.count.min(9);
-        ours.push(("Win+Ctrl+Alt+←/→".to_owned(), "Previous / next workspace"));
-        ours.push((format!("Win+Ctrl+Alt+1-{n}"), "Go to workspace"));
-        ours.push(("Win+Alt+Shift+←/→".to_owned(), "Move window left / right"));
-        ours.push((format!("Win+Alt+Shift+1-{n}"), "Move window to workspace"));
-    }
-    ours.push(("Win+Alt+/".to_owned(), "Show / hide this card"));
-    ours.push(("Ctrl+Alt+Shift+Q".to_owned(), "Quit wdock"));
-    let windows = [
-        ("Win", "Start"),
-        ("Alt+Tab", "Windows switcher"),
-        ("Win+Tab", "Task view"),
-        ("Win+Shift+S", "Screenshot"),
-        ("Win+E", "File Explorer"),
-        ("Win+R", "Run"),
-        ("Win+V", "Clipboard history"),
-        ("Win+.", "Emoji"),
-        ("Win+D", "Show desktop"),
-        ("Win+L", "Lock"),
-        ("Ctrl+Shift+Esc", "Task Manager"),
-    ];
-    vec![
-        Group { title: "WDOCK", rows: ours },
-        Group { title: "WINDOWS", rows: windows.into_iter().map(|(k, v)| (k.to_owned(), v)).collect() },
-    ]
-}
-
-fn register_hotkeys(hwnd: HWND, config: &Config) -> Result<()> {
+/// wdock's only shortcut besides the emergency quit. Win+Alt+Space does not
+/// collide with explorer's; everything else is done with the mouse.
+fn register_hotkeys(hwnd: HWND) -> Result<()> {
     unsafe {
         RegisterHotKey(Some(hwnd), HOTKEY_EMERGENCY_EXIT, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, VK_Q.0.into())?;
-    }
-    let taken: Vec<String> = hotkeys(config)
-        .into_iter()
-        .filter(|(id, modifiers, vk, _)| unsafe { RegisterHotKey(Some(hwnd), *id, *modifiers, *vk).is_err() })
-        .map(|(_, _, _, name)| name)
-        .collect();
-    if !taken.is_empty() {
-        log::warn!("shortcuts taken by another app: {}", taken.join(", "));
+        if RegisterHotKey(Some(hwnd), HOTKEY_LAUNCHER, MOD_WIN | MOD_ALT | MOD_NOREPEAT, VK_SPACE.0.into()).is_err() {
+            log::warn!("Win+Alt+Space is taken by another app; the launcher stays on the top bar button");
+        }
     }
     Ok(())
 }
 
 fn unregister_hotkeys(hwnd: HWND) {
-    let ids = (HOTKEY_EMERGENCY_EXIT..=HOTKEY_SHORTCUTS)
-        .chain((1..=9).flat_map(|n| [HOTKEY_WORKSPACE_BASE + n, HOTKEY_MOVE_BASE + n]));
-    for id in ids {
+    for id in [HOTKEY_EMERGENCY_EXIT, HOTKEY_LAUNCHER] {
         let _ = unsafe { UnregisterHotKey(Some(hwnd), id) };
     }
 }
@@ -720,8 +549,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     log::info!("emergency exit hotkey pressed");
                     let _ = unsafe { DestroyWindow(hwnd) };
                 }
-                HOTKEY_LAUNCHER | HOTKEY_LAUNCHER_ALT => open_launcher(hwnd),
-                id => with_shell(|shell| shell.hotkey(id)),
+                HOTKEY_LAUNCHER => open_launcher(hwnd),
+                _ => {}
             }
             LRESULT(0)
         }

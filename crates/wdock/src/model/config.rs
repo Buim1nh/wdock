@@ -18,7 +18,6 @@ pub struct Config {
     pub tray: TrayConfig,
     pub dock: DockConfig,
     pub workspaces: WorkspacesConfig,
-    pub switcher: SwitcherConfig,
     pub island: IslandConfig,
 }
 
@@ -109,12 +108,6 @@ pub struct WorkspacesConfig {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
-pub struct SwitcherConfig {
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(default)]
 pub struct IslandConfig {
     pub enabled: bool,
     /// Pomodoro focus length, minutes.
@@ -191,12 +184,6 @@ impl Default for DockConfig {
 impl Default for WorkspacesConfig {
     fn default() -> Self {
         Self { count: 4 }
-    }
-}
-
-impl Default for SwitcherConfig {
-    fn default() -> Self {
-        Self { enabled: true }
     }
 }
 

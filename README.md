@@ -10,7 +10,7 @@ wdock is a macOS-style top bar, dock and Dynamic Island for Windows 11, written 
 
 [![wdock demo](docs/media/demo.gif)](docs/media/demo.mp4)
 
-*The demo shows the dock's magnification, the launcher, the shortcut card, the calendar and quick settings. Click it for the 1080p MP4.*
+*The demo shows the dock's magnification, the launcher, the tray icons, the calendar and quick settings. Click it for the 1080p MP4.*
 
 ## Contents
 
@@ -33,8 +33,8 @@ All screenshots are 1920×1080.
 |---|---|
 | ![Desktop with the top bar and dock](docs/media/desktop.png) | ![Dock magnification](docs/media/dock.png) |
 | Top bar and dock | Dock magnification and labels |
-| ![Launcher](docs/media/launcher.png) | ![Shortcut card](docs/media/shortcuts.png) |
-| Launcher (Win+Alt+Space) | Shortcut card (Win+Alt+/) |
+| ![Launcher](docs/media/launcher.png) | |
+| Launcher (Win+Alt+Space) | |
 | ![Calendar](docs/media/calendar.png) | ![Quick settings](docs/media/quick-settings.png) |
 | Calendar | Quick settings with the Wi-Fi and sound-output lists open |
 | ![Dynamic Island, expanded](docs/media/island.png) | |
@@ -44,7 +44,7 @@ All screenshots are 1920×1080.
 
 ### Top bar
 
-- Launcher button and shortcut-card button.
+- Launcher button and overview button.
 - Workspace pills (4 workspaces per monitor by default).
 - Title of the active window.
 - System tray, hosted by wdock itself: tray icons, balloons and overflow work as in the taskbar.
@@ -86,7 +86,13 @@ A pill at the top centre of each monitor that expands on hover.
 ### Launcher and windows
 
 - **Launcher:** fuzzy search over installed apps (Win32 and Store) and Settings pages.
-- **Window switcher** (Alt+\`), **overview** of all windows (Win+\`), and **virtual workspaces** per monitor.
+- **Overview** of the current workspace's windows (the button next to the launcher, or a click on the active workspace number), and **virtual workspaces** per monitor. Click a workspace number to switch to it.
+
+### Tray icons
+
+- Right-click an icon in the top bar and choose **Hide from top bar** to move it into the overflow chevron. The chevron appears only while something is hidden. **Show on top bar** moves it back.
+- The choice is saved per app in `%LOCALAPPDATA%\wdock	ray-hidden.txt`, matched by the executable's name (and by the icon's GUID when the app gives one).
+- The same menu has **Open the app's menu**, which passes the click on to the app.
 
 ### Game mode
 
@@ -102,7 +108,7 @@ Explorer stays the Windows shell ("hybrid mode"), and wdock runs alongside it:
   - If explorer stops honouring it, wdock registers again, and as a last resort sets the monitor's work area itself (restored on exit).
 - **The dock** reserves no space in smart mode. With `auto_hide = "off"` it registers a bottom AppBar too.
 - **The tray**: wdock owns the window that apps send tray icons to, and forwards the messages it does not handle to explorer's taskbar.
-- **Shortcuts** use `RegisterHotKey` with combinations Windows does not use. Win+Shift+S, PrtScn, Win+X, `ms-settings:` links and Windows' other shortcuts keep working.
+- **Shortcuts**: wdock registers only two hotkeys with `RegisterHotKey`, Win+Alt+Space and Ctrl+Alt+Shift+Q. Everything else is on the mouse, and Windows' own shortcuts (Alt+Tab, Win+Tab, Win+Shift+S, ...) keep working.
 - **Rendering**: Direct2D on the CPU (WARP) by default, composed with DirectComposition and DWM acrylic. Everything is event-driven; no timer runs while nothing changes.
 
 ## Installation
@@ -175,19 +181,12 @@ Quit wdock before installing over a running copy.
 
 ## Keyboard shortcuts
 
-Win+Alt+/ or the keyboard button in the top bar shows these on a card you can drag around.
-
 | Keys | Action |
 |---|---|
-| Win+Alt+Space (also Ctrl+Alt+Space if it is free) | Launcher |
-| Alt+\` / Alt+Shift+\` | Window switcher (release Alt to pick) |
-| Win+\` | Overview of the current workspace |
-| Win+Ctrl+Alt+← / → / 1–9 | Switch workspace |
-| Win+Alt+Shift+← / → / 1–9 | Move the active window to another workspace |
-| Win+Alt+/ | Show or hide the shortcut card |
+| Win+Alt+Space | Launcher |
 | Ctrl+Alt+Shift+Q | Quit wdock and bring explorer's taskbar back |
 
-If another app already owns a combination, wdock logs it and skips it.
+If another app already owns Win+Alt+Space, wdock logs it and the launcher stays on the top bar button. Workspaces and the overview are reached with the mouse.
 
 ## Configuration
 
@@ -204,7 +203,6 @@ The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a
 | `[tray]` | `max_visible` icons before the overflow chevron (12), `overflow` executable fragments always hidden |
 | `[dock]` | `icon_size` (32), `monitors` (`"primary"`), `windows` (`"all"` or `"this-monitor"`), `magnification` (2.0), `auto_hide` (`"smart"`, `"on"`, `"off"`), `pinned` |
 | `[workspaces]` | `count` per monitor (4, up to 9) |
-| `[switcher]` | `enabled` (true) |
 | `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
 
 Pinning, unpinning or reordering from the dock saves the list to `%LOCALAPPDATA%\wdock\pinned.txt`, which then takes precedence over `pinned`; delete that file to go back to the config.
@@ -215,9 +213,9 @@ State and logs live in `%LOCALAPPDATA%\wdock\`:
 |---|---|
 | `logs\wdock.log`, `logs\wdock-guard.log` | logs (rotated at 2 MB) |
 | `pinned.txt` | pinned apps, in dock order |
+| `tray-hidden.txt` | tray icons hidden from the top bar |
 | `hidden.txt` | windows parked in other workspaces |
 | `taskbar.txt` | explorer's original auto-hide state |
-| `shortcuts.txt` | where the shortcut card was dragged to |
 
 ## Troubleshooting
 
@@ -265,7 +263,7 @@ The source is in `crates/wdock/src`:
 
 | Path | Contents |
 |---|---|
-| `app.rs` | message loop, shortcuts, game mode, AppBar checks |
+| `app.rs` | message loop, the two hotkeys, game mode, AppBar checks |
 | `ui/` | Direct2D bars, the dock, the island, popups, composition layers |
 | `platform/` | Win32 wrappers, the tray host, AppBars, window events |
 | `services/` | audio, network and Wi-Fi, power, brightness, media session, app index, icons |
@@ -282,7 +280,7 @@ Release build on Windows 11, two 1080p monitors.
 | CPU while media plays (animated equalizer) | ~16 ms per 60 s; DWM's own load unchanged |
 | CPU with a full-screen app in front | 0 ms over 20 s |
 | Full-screen (F11) detection | ~15 ms |
-| Leaks (200 shortcut-card toggles + 20 launcher cycles) | handles stable, GDI 40–43, memory plateaus |
+| Leaks (200 overview toggles + 20 launcher cycles) | handles stable, GDI 40–43, memory plateaus |
 | Shell crash | the guard restarts it in ~1 s; tray icons return and the taskbar stays hidden |
 
 ## License

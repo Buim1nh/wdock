@@ -5,4 +5,5 @@ pub mod pins;
 pub mod pomodoro;
 pub mod search;
 pub mod tray;
+pub mod tray_hidden;
 pub mod windows;

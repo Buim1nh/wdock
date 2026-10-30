@@ -10,7 +10,7 @@ wdock là bộ top bar, dock và Dynamic Island kiểu macOS cho Windows 11, vi�
 
 [![Video demo wdock](docs/media/demo.gif)](docs/media/demo.mp4)
 
-*Video demo gồm dock phóng to, launcher, bảng phím tắt, lịch và Quick Settings. Bấm vào để xem bản MP4 1080p.*
+*Video demo gồm dock phóng to, launcher, icon khay, lịch và Quick Settings. Bấm vào để xem bản MP4 1080p.*
 
 ## Mục lục
 
@@ -33,8 +33,8 @@ Tất cả ảnh có độ phân giải 1920×1080.
 |---|---|
 | ![Desktop với top bar và dock](docs/media/desktop.png) | ![Dock phóng to](docs/media/dock.png) |
 | Top bar và dock | Dock phóng to kèm nhãn tên |
-| ![Launcher](docs/media/launcher.png) | ![Bảng phím tắt](docs/media/shortcuts.png) |
-| Launcher (Win+Alt+Space) | Bảng phím tắt (Win+Alt+/) |
+| ![Launcher](docs/media/launcher.png) | |
+| Launcher (Win+Alt+Space) | |
 | ![Lịch](docs/media/calendar.png) | ![Quick Settings](docs/media/quick-settings.png) |
 | Lịch | Quick Settings đang mở danh sách Wi-Fi và thiết bị âm thanh |
 | ![Dynamic Island mở rộng](docs/media/island.png) | |
@@ -44,7 +44,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
 
 ### Top bar
 
-- Nút launcher và nút mở bảng phím tắt.
+- Nút launcher và nút Overview.
 - Ô chọn workspace (mặc định 4 workspace cho mỗi màn hình).
 - Tiêu đề cửa sổ đang mở.
 - Khay hệ thống do wdock tự giữ: icon, thông báo balloon và phần tràn (overflow) hoạt động như trên taskbar.
@@ -86,7 +86,13 @@ Viên thuốc ở giữa đỉnh mỗi màn hình, rê chuột vào thì mở r�
 ### Launcher và cửa sổ
 
 - **Launcher:** tìm gần đúng (fuzzy) trong các app đã cài (Win32 và Store) và các trang Settings.
-- **Switcher** (Alt+\`), **Overview** toàn bộ cửa sổ (Win+\`), và **workspace ảo** cho từng màn hình.
+- **Overview** các cửa sổ của workspace hiện tại (nút cạnh launcher, hoặc bấm số workspace đang chọn), và **workspace ảo** cho từng màn hình. Bấm một số workspace để chuyển sang đó.
+
+### Icon khay
+
+- Bấm chuột phải vào icon trên top bar, chọn **Hide from top bar** để chuyển icon vào nút mũi tên tràn. Nút này chỉ hiện khi có icon bị ẩn. **Show on top bar** đưa icon trở lại.
+- Lựa chọn được lưu theo từng app trong `%LOCALAPPDATA%\wdock	ray-hidden.txt`, khớp theo tên file thực thi (và theo GUID của icon khi app có GUID).
+- Cùng menu đó có **Open the app's menu** để chuyển cú nhấp chuột cho app.
 
 ### Game mode
 
@@ -102,7 +108,7 @@ Explorer vẫn là shell của Windows ("chế độ lai"), wdock chạy song so
   - Nếu explorer không giữ chỗ, wdock đăng ký lại. Nếu vẫn không được, wdock tự đặt work area cho màn hình đó và trả lại khi thoát.
 - **Dock** ở chế độ smart không giữ chỗ. Với `auto_hide = "off"`, dock đăng ký thêm một AppBar ở đáy.
 - **Khay hệ thống:** wdock giữ cửa sổ mà các app gửi icon khay tới, và chuyển tiếp cho taskbar của explorer những thông điệp nó không xử lý.
-- **Phím tắt** dùng `RegisterHotKey` với các tổ hợp Windows không dùng. Win+Shift+S, PrtScn, Win+X, link `ms-settings:` và các phím tắt khác của Windows vẫn hoạt động.
+- **Phím tắt:** wdock chỉ đăng ký hai tổ hợp bằng `RegisterHotKey`: Win+Alt+Space và Ctrl+Alt+Shift+Q. Mọi thao tác khác dùng chuột, còn phím tắt của Windows (Alt+Tab, Win+Tab, Win+Shift+S, ...) vẫn hoạt động.
 - **Vẽ giao diện:** mặc định dùng Direct2D trên CPU (WARP), ghép hình bằng DirectComposition và hiệu ứng acrylic của DWM. Mọi thứ chạy theo sự kiện; khi không có gì thay đổi thì không timer nào chạy.
 
 ## Cài đặt
@@ -175,19 +181,12 @@ Cần thoát wdock trước khi cài đè.
 
 ## Phím tắt
 
-Win+Alt+/ (hoặc nút bàn phím trên top bar) mở bảng tóm tắt các phím này; bảng kéo đi được.
-
 | Phím | Chức năng |
 |---|---|
-| Win+Alt+Space (thêm Ctrl+Alt+Space nếu còn trống) | Launcher |
-| Alt+\` / Alt+Shift+\` | Chuyển cửa sổ (nhả Alt để chọn) |
-| Win+\` | Overview workspace hiện tại |
-| Win+Ctrl+Alt+← / → / 1–9 | Chuyển workspace |
-| Win+Alt+Shift+← / → / 1–9 | Mang cửa sổ đang mở sang workspace khác |
-| Win+Alt+/ | Hiện hoặc ẩn bảng phím tắt |
+| Win+Alt+Space | Launcher |
 | Ctrl+Alt+Shift+Q | Thoát wdock, trả lại taskbar của explorer |
 
-Nếu một tổ hợp đã bị app khác chiếm, wdock ghi vào log rồi bỏ qua tổ hợp đó.
+Nếu Win+Alt+Space đã bị app khác chiếm, wdock ghi vào log và launcher vẫn mở bằng nút trên top bar. Workspace và Overview dùng chuột.
 
 ## Cấu hình
 
@@ -204,7 +203,6 @@ File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động 
 | `[tray]` | `max_visible`: số icon trước nút tràn (12); `overflow`: các tên file chạy luôn bị đưa vào phần tràn |
 | `[dock]` | `icon_size` (32), `monitors` (`"primary"`), `windows` (`"all"` hoặc `"this-monitor"`), `magnification` (2.0), `auto_hide` (`"smart"`, `"on"`, `"off"`), `pinned` |
 | `[workspaces]` | `count`: số workspace mỗi màn hình (4, tối đa 9) |
-| `[switcher]` | `enabled` (true) |
 | `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
 
 Ghim, bỏ ghim hoặc sắp xếp lại trên dock sẽ lưu danh sách vào `%LOCALAPPDATA%\wdock\pinned.txt`, và file này được ưu tiên hơn `pinned`; xóa file đó để quay lại dùng cấu hình.
@@ -217,7 +215,7 @@ Dữ liệu và log nằm trong `%LOCALAPPDATA%\wdock\`:
 | `pinned.txt` | app ghim, theo thứ tự trên dock |
 | `hidden.txt` | cửa sổ đang ở workspace khác |
 | `taskbar.txt` | trạng thái auto-hide gốc của explorer |
-| `shortcuts.txt` | vị trí bảng phím tắt sau khi kéo |
+| `tray-hidden.txt` | icon khay bị ẩn khỏi top bar |
 
 ## Xử lý sự cố
 
@@ -265,7 +263,7 @@ Mã nguồn nằm trong `crates/wdock/src`:
 
 | Thư mục | Nội dung |
 |---|---|
-| `app.rs` | vòng lặp message, phím tắt, game mode, kiểm tra AppBar |
+| `app.rs` | vòng lặp message, hai phím tắt, game mode, kiểm tra AppBar |
 | `ui/` | các thanh Direct2D, dock, island, popup, lớp composition |
 | `platform/` | lớp bọc Win32, tray host, AppBar, sự kiện cửa sổ |
 | `services/` | âm thanh, mạng và Wi-Fi, nguồn, độ sáng, phiên media, chỉ mục app, icon |
@@ -282,7 +280,7 @@ Bản release trên Windows 11, 2 màn hình 1080p.
 | CPU khi đang phát media (equalizer chuyển động) | ~16 ms mỗi 60 giây; tải của DWM không đổi |
 | CPU khi có app toàn màn hình ở phía trước | 0 ms trong 20 giây |
 | Thời gian phát hiện F11/toàn màn hình | ~15 ms |
-| Rò rỉ (200 lần mở/đóng bảng phím tắt + 20 lần launcher) | handle ổn định, GDI 40–43, bộ nhớ dừng ở một mức |
+| Rò rỉ (200 lần mở/đóng overview + 20 lần launcher) | handle ổn định, GDI 40–43, bộ nhớ dừng ở một mức |
 | Shell crash | guard khởi động lại sau ~1 giây; icon khay hiện lại, taskbar vẫn ẩn |
 
 ## Giấy phép

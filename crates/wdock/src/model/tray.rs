@@ -6,6 +6,7 @@
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Imaging::IWICBitmapSource;
 
+use crate::model::tray_hidden::HiddenApp;
 use crate::platform::tray_proto::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_STATE, NIF_TIP, NIS_HIDDEN, NotifyIconData,
     TrayCommand, TrayMessage,
@@ -74,11 +75,13 @@ pub struct TrayModel {
     next_id: u64,
     revision: u64,
     env: TrayEnv,
+    /// Apps the user hid from the top bar (see `tray_hidden`).
+    hidden: Vec<HiddenApp>,
 }
 
 impl TrayModel {
     pub fn new(env: TrayEnv) -> Self {
-        Self { icons: Vec::new(), next_id: 1, revision: 0, env }
+        Self { icons: Vec::new(), next_id: 1, revision: 0, env, hidden: Vec::new() }
     }
 
     /// Changes whenever anything visible about the tray changes.
@@ -205,17 +208,44 @@ impl TrayModel {
         changed
     }
 
-    /// Visible icons split into the bar and the overflow popup. `overflow`
-    /// lists case-insensitive executable-name fragments always sent to overflow.
+    /// Visible icons split into the bar and the overflow popup. Icons the user
+    /// hid and icons matching `overflow` (case-insensitive executable-name
+    /// fragments) always go to the popup.
     pub fn split(&self, max_visible: usize, overflow: &[String]) -> (Vec<&TrayIcon>, Vec<&TrayIcon>) {
         let (forced, mut bar): (Vec<&TrayIcon>, Vec<&TrayIcon>) = self
             .icons
             .iter()
             .filter(|i| !i.hidden)
-            .partition(|i| overflow.iter().any(|p| !p.is_empty() && i.exe.contains(&p.to_lowercase())));
+            .partition(|i| {
+                self.hidden_by_user(i) || overflow.iter().any(|p| !p.is_empty() && i.exe.contains(&p.to_lowercase()))
+            });
         let mut extra = if bar.len() > max_visible { bar.split_off(max_visible) } else { Vec::new() };
         extra.extend(forced);
         (bar, extra)
+    }
+
+    pub fn hidden_by_user(&self, icon: &TrayIcon) -> bool {
+        self.hidden.iter().any(|h| h.matches(&icon.exe, icon.guid))
+    }
+
+    /// Replaces the list of user-hidden apps (loaded at start).
+    pub fn set_hidden(&mut self, apps: Vec<HiddenApp>) {
+        self.hidden = apps;
+        self.revision += 1;
+    }
+
+    /// Moves an icon between the bar and the overflow popup. Returns the new
+    /// list to persist, or `None` for an unknown icon.
+    pub fn toggle_hidden(&mut self, id: u64) -> Option<Vec<HiddenApp>> {
+        let icon = self.icon(id)?;
+        let (exe, guid) = (icon.exe.clone(), icon.guid);
+        if self.hidden_by_user(icon) {
+            self.hidden.retain(|h| !h.matches(&exe, guid));
+        } else {
+            self.hidden.push(HiddenApp::for_icon(&exe, guid));
+        }
+        self.revision += 1;
+        Some(self.hidden.clone())
     }
 
     pub fn set_screen_rect(&mut self, id: u64, rect: Option<RECT>) {
