@@ -181,7 +181,23 @@ pub fn set_default_output(id: &str) {
     }
 }
 
+thread_local! {
+    /// When wdock's own sliders last changed volume or brightness.
+    static OWN_CHANGE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+fn mark_own_change() {
+    OWN_CHANGE.set(Some(std::time::Instant::now()));
+}
+
+/// True shortly after a wdock slider changed volume or brightness, so the
+/// island does not announce a change the user is already looking at.
+pub fn own_change_recent() -> bool {
+    OWN_CHANGE.get().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1500))
+}
+
 pub fn set_volume(level: f32) {
+    mark_own_change();
     with(|s| {
         if let Some(audio) = &s.audio {
             audio.set_level(level);
@@ -190,6 +206,7 @@ pub fn set_volume(level: f32) {
 }
 
 pub fn set_muted(muted: bool) {
+    mark_own_change();
     with(|s| {
         if let Some(audio) = &s.audio {
             audio.set_muted(muted);
@@ -209,6 +226,7 @@ pub fn nudge_volume(delta: f32) {
 /// Sets a display's brightness (`brightness::Display::id`). While a slider is
 /// dragged pass `last = false`; the final value is always written.
 pub fn set_brightness(id: u32, percent: u8, last: bool) {
+    mark_own_change();
     with(|s| s.brightness.set(id, percent, last));
 }
 

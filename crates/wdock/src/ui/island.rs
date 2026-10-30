@@ -678,7 +678,8 @@ impl View for Island {
         self.pomodoro = pomodoro_state();
         let status = services::status();
         let sensors = privacy::current();
-        let notice = notice_for(&self.status, &status).or_else(|| privacy_notice(self.privacy, sensors));
+        let level_notice = notice_for(&self.status, &status).filter(|_| !services::own_change_recent());
+        let notice = level_notice.or_else(|| privacy_notice(self.privacy, sensors));
         if self.notices
             && !self.hovered
             && let Some(notice) = notice
