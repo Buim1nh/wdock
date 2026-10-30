@@ -157,12 +157,19 @@ pub fn verify() -> bool {
             update(hwnd, |bar| bar.failures = 0);
             continue;
         }
-        recheck = true;
+        if replaced && failures == RETRIES {
+            log::warn!("explorer ignores the work area too; restarting explorer brings the strip back");
+            update(hwnd, |bar| bar.failures = RETRIES + 1);
+        }
         if replaced {
             // Our own work area was overwritten (a display change, or explorer
-            // laying out again): take the strip once more.
+            // laying out again): take the strip once more, but do not keep
+            // checking. A stuck explorer can ignore the work area too, and
+            // fighting it on a timer would cost CPU for nothing; the next
+            // rebuild or full-screen exit tries again.
             set_work_area(without_strip(edge, rect, work));
         } else if failures < RETRIES {
+            recheck = true;
             log::warn!("explorer is not reserving a bar's strip (work area {work:?}); registering again");
             let mut d = data(hwnd, edge, rect);
             unsafe {
@@ -175,6 +182,7 @@ pub fn verify() -> bool {
             log::warn!("explorer keeps ignoring a bar's strip; setting the work area to keep maximized windows clear");
             set_work_area(without_strip(edge, rect, work));
             update(hwnd, |bar| bar.replaced = Some(work));
+            recheck = true;
         }
     }
     recheck
