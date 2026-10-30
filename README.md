@@ -61,7 +61,7 @@ All screenshots are 1920×1080.
 - **Sound:** a volume slider, plus a list of the active outputs (speakers, headphones, HDMI, Bluetooth).
   - Clicking an output makes it the default for every role, and the slider follows it.
   - This uses the undocumented `IPolicyConfig` interface, as other output switchers do. If Windows refuses, the Sound settings page opens instead.
-- **Display:** brightness slider, on screens that support it.
+- **Display:** one brightness slider per screen that can be controlled, named after the monitor: the laptop panel through WMI, external monitors through DDC/CI. Monitors without DDC/CI show nothing. Screens are detected at start, on display changes and after resume (never polled), on a worker thread; dragging sends at most one write per 100 ms plus the final value.
 - **Battery** state, and buttons to lock, sleep, sign out, restart, shut down and open Settings. Power actions ask for confirmation.
 
 ### Dock

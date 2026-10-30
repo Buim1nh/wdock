@@ -61,7 +61,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
 - **Âm thanh:** thanh âm lượng và danh sách thiết bị phát đang hoạt động (loa, tai nghe, HDMI, Bluetooth).
   - Bấm vào một thiết bị để đặt nó làm mặc định cho mọi vai trò; thanh âm lượng chuyển theo thiết bị mới.
   - Tính năng dùng interface chưa công bố `IPolicyConfig` như các công cụ đổi thiết bị khác. Nếu Windows từ chối, trang Sound settings sẽ mở ra thay thế.
-- **Màn hình:** thanh độ sáng, với màn hình hỗ trợ.
+- **Màn hình:** mỗi màn hình điều khiển được có một thanh độ sáng, ghi tên màn hình: màn hình laptop qua WMI, màn hình ngoài qua DDC/CI. Màn hình không hỗ trợ DDC/CI thì không hiện. Việc dò màn hình chạy ở luồng riêng khi khởi động, khi đổi màn hình và sau khi thức dậy (không bao giờ dò định kỳ); khi kéo thanh chỉ ghi tối đa một lần mỗi 100 ms, cộng giá trị cuối khi thả.
 - **Pin** và các nút khóa máy, ngủ, đăng xuất, khởi động lại, tắt máy, mở Settings. Các thao tác nguồn đều hỏi lại trước khi thực hiện.
 
 ### Dock
