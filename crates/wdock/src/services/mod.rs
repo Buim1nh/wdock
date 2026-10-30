@@ -10,6 +10,7 @@ pub mod icons;
 pub mod media;
 pub mod network;
 pub mod power;
+pub mod wifi;
 
 use std::cell::RefCell;
 
@@ -21,6 +22,7 @@ pub const KIND_AUDIO: usize = 1;
 pub const KIND_AUDIO_DEVICE: usize = 2;
 pub const KIND_NETWORK: usize = 3;
 pub const KIND_BRIGHTNESS: usize = 4;
+pub const KIND_AUDIO_LIST: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Volume {
@@ -57,6 +59,8 @@ pub struct SystemStatus {
     pub brightness: Option<u8>,
     /// Counts default-output-device changes (headphones plugged in, ...).
     pub audio_device: u32,
+    /// Counts changes to the set of output devices (added, removed, default moved).
+    pub audio_devices: u32,
 }
 
 struct Services {
@@ -82,6 +86,7 @@ pub fn start(target: HWND) {
             battery: power::battery(),
             brightness: None,
             audio_device: 0,
+            audio_devices: 0,
         },
         audio,
         network,
@@ -117,6 +122,7 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
                 s.status.volume = s.audio.as_ref().and_then(audio::Audio::state);
                 s.status.audio_device = s.status.audio_device.wrapping_add(1);
             }
+            KIND_AUDIO_LIST => s.status.audio_devices = s.status.audio_devices.wrapping_add(1),
             KIND_AUDIO => s.status.volume = s.audio.as_ref().and_then(audio::Audio::state),
             KIND_NETWORK => s.status.network = s.network.state(),
             KIND_BRIGHTNESS => {
@@ -136,6 +142,18 @@ pub fn refresh_power() -> bool {
         std::mem::replace(&mut s.status.battery, battery) != battery
     })
     .unwrap_or(false)
+}
+
+pub fn audio_outputs() -> Vec<audio::Output> {
+    with(|s| s.audio.as_ref().map(audio::Audio::outputs)).flatten().unwrap_or_default()
+}
+
+/// Switches the default output; opens the Sound settings page when Windows refuses.
+pub fn set_default_output(id: &str) {
+    if let Some(Err(err)) = with(|s| s.audio.as_ref().map(|a| a.set_default_output(id))).flatten() {
+        log::warn!("cannot switch default output: {err}");
+        crate::platform::launch::open("ms-settings:sound");
+    }
 }
 
 pub fn set_volume(level: f32) {

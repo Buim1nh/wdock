@@ -1,6 +1,7 @@
 pub mod backdrop;
 pub mod bar;
 pub mod dock;
+pub mod eq_layer;
 pub mod gfx;
 pub mod glyphs;
 pub mod island;

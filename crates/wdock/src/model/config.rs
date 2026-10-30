@@ -123,6 +123,9 @@ pub struct IslandConfig {
     pub pomodoro_break: u32,
     /// Briefly expand for volume, brightness, power, network and audio-device changes.
     pub notices: bool,
+    /// Animate the compact equalizer while media plays. DirectComposition
+    /// plays the animation, so wdock itself does no work per frame.
+    pub animate_equalizer: bool,
 }
 
 // Defaults are spelled out here rather than parsed from the template: serde's
@@ -199,7 +202,7 @@ impl Default for SwitcherConfig {
 
 impl Default for IslandConfig {
     fn default() -> Self {
-        Self { enabled: true, pomodoro_work: 25, pomodoro_break: 5, notices: true }
+        Self { enabled: true, pomodoro_work: 25, pomodoro_break: 5, notices: true, animate_equalizer: true }
     }
 }
 

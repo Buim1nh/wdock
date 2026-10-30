@@ -41,6 +41,8 @@ pub struct PaintCx<'a> {
     pub height: f32,
     /// Monitor DPI / 96. Views lay out in DIPs and multiply by this.
     pub scale: f32,
+    /// The window's root composition visual, for views that add animated layers.
+    pub root: &'a windows::Win32::Graphics::DirectComposition::IDCompositionVisual,
 }
 
 /// Content of a bar. Event handlers return `true` when the bar must repaint.
@@ -444,6 +446,7 @@ fn paint(hwnd: HWND, state: &mut BarState) {
     unsafe {
         let _ = GetClientRect(hwnd, &mut client);
     }
+    let root = surface.root();
     let drawn = surface.draw(gfx, |dc| {
         view.paint(&PaintCx {
             dc,
@@ -452,6 +455,7 @@ fn paint(hwnd: HWND, state: &mut BarState) {
             width: (client.right - client.left) as f32,
             height: (client.bottom - client.top) as f32,
             scale: *scale,
+            root,
         });
     });
     if let Err(err) = drawn {

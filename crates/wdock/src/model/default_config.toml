@@ -77,3 +77,6 @@ pomodoro_break = 5
 # Briefly expand when volume, brightness, charging, battery, network or the
 # audio device change. Windows' own pop-ups are left alone.
 notices = true
+# Animate the equalizer next to what is playing. Windows' compositor (DWM)
+# plays the animation, so wdock does no work per frame; false keeps still bars.
+animate_equalizer = true

@@ -13,11 +13,13 @@ use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 use crate::model::config::Backdrop;
 use crate::platform::launch;
 use crate::platform::session::{self, SessionAction};
+use crate::services::audio::{Output, OutputKind};
 use crate::services::{self, NetState, SystemStatus};
 use crate::ui::backdrop::DWM_CORNER_RADIUS;
 use crate::ui::bar::{self, Button, PaintCx, View};
 use crate::ui::gfx::{rect, rounded};
 use crate::ui::glyphs;
+use crate::ui::popups::wifi_panel::{Outcome, WifiHit, WifiPanel};
 use crate::ui::text;
 
 const WIDTH: f32 = 300.0;
@@ -28,6 +30,7 @@ const SLIDER_ROW: f32 = 32.0;
 const ICON_BUTTON: f32 = 30.0;
 const POWER_BUTTON: f32 = 38.0;
 const INFO_LINE: f32 = 22.0;
+const OUTPUT_ROW: f32 = 30.0;
 const GAP: f32 = 10.0;
 const TIMER_CONFIRM: usize = 1;
 const CONFIRM_MS: u32 = 3000;
@@ -35,8 +38,11 @@ const CONFIRM_MS: u32 = 3000;
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Hit {
     Network,
+    Wifi(WifiHit),
     Mute,
     Volume,
+    OutputToggle,
+    Output(usize),
     Brightness,
     Battery,
     Session(SessionAction),
@@ -69,6 +75,10 @@ pub struct QuickSettingsView {
     hot: Option<Hit>,
     drag: Option<Drag>,
     confirm: Option<SessionAction>,
+    outputs: Vec<Output>,
+    outputs_open: bool,
+    /// The Wi-Fi list; `Some` (and scanning) only while expanded.
+    wifi: Option<WifiPanel>,
 }
 
 impl QuickSettingsView {
@@ -84,6 +94,9 @@ impl QuickSettingsView {
             hot: None,
             drag: None,
             confirm: None,
+            outputs: services::audio_outputs(),
+            outputs_open: false,
+            wifi: None,
         };
         view.layout();
         view
@@ -98,12 +111,16 @@ impl QuickSettingsView {
 
         self.targets.push((Hit::Network, rect(left, y, right, y + TILE * s)));
         y += (TILE + GAP) * s;
+        if let Some(wifi) = &mut self.wifi {
+            y = wifi.layout(left, right, y - GAP * s / 2.0, s) + GAP * s;
+        }
 
         let slider = |hit: Hit, y: &mut f32, targets: &mut Vec<_>, tracks: &mut Vec<_>| {
             *y += LABEL * s;
             let button = rect(left, *y + (SLIDER_ROW - ICON_BUTTON) / 2.0 * s, left + ICON_BUTTON * s, *y + (SLIDER_ROW + ICON_BUTTON) / 2.0 * s);
             if hit == Hit::Volume {
                 targets.push((Hit::Mute, button));
+                targets.push((Hit::OutputToggle, rect(left + 70.0 * s, *y - LABEL * s, right, *y)));
             }
             let track = rect(button.right + 10.0 * s, *y, right - 40.0 * s, *y + SLIDER_ROW * s);
             targets.push((hit, track));
@@ -112,6 +129,13 @@ impl QuickSettingsView {
         };
         if self.status.volume.is_some() {
             slider(Hit::Volume, &mut y, &mut self.targets, &mut self.tracks);
+            if self.outputs_open {
+                for i in 0..self.outputs.len() {
+                    self.targets.push((Hit::Output(i), rect(left, y, right, y + OUTPUT_ROW * s)));
+                    y += OUTPUT_ROW * s;
+                }
+                y += GAP * s;
+            }
         }
         if self.status.brightness.is_some() {
             slider(Hit::Brightness, &mut y, &mut self.targets, &mut self.tracks);
@@ -133,6 +157,9 @@ impl QuickSettingsView {
     }
 
     fn hit(&self, x: f32, y: f32) -> Option<Hit> {
+        if let Some(hit) = self.wifi.as_ref().and_then(|w| w.hit(x, y)) {
+            return Some(Hit::Wifi(hit));
+        }
         self.targets
             .iter()
             .find(|(_, r)| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
@@ -194,9 +221,13 @@ impl View for QuickSettingsView {
     }
 
     fn model_changed(&mut self) -> bool {
+        let wifi_changed = self.wifi.as_mut().is_some_and(WifiPanel::refresh);
         let status = services::status();
-        if status == self.status {
+        if status == self.status && !wifi_changed {
             return false;
+        }
+        if status.audio_devices != self.status.audio_devices {
+            self.outputs = services::audio_outputs();
         }
         self.status = status;
         self.layout();
@@ -244,13 +275,44 @@ impl View for QuickSettingsView {
                     let text_left = badge.right + 12.0 * s;
                     let mid = (r.top + r.bottom) / 2.0;
                     text::draw(cx, title, &bold, rect(text_left, r.top + 6.0 * s, r.right - 10.0 * s, mid), theme.text);
-                    text::draw(cx, &detail, &normal, rect(text_left, mid, r.right - 10.0 * s, r.bottom - 6.0 * s), theme.text_dim);
+                    text::draw(cx, &detail, &normal, rect(text_left, mid, r.right - 30.0 * s, r.bottom - 6.0 * s), theme.text_dim);
+                    let chevron = if self.wifi.is_some() { "\u{E70E}" } else { "\u{E70D}" };
+                    text::draw(cx, chevron, &icon, rect(r.right - 30.0 * s, r.top, r.right - 6.0 * s, r.bottom), theme.text_dim);
                 }
+                Hit::Wifi(_) => {}
                 Hit::Mute => {
                     let muted = self.status.volume.is_some_and(|v| v.muted);
                     fill(r, 15.0 * s, plate_color(hit));
                     let level = self.slider_value(Hit::Volume);
                     text::draw(cx, glyphs::volume(level, muted), &icon, r, theme.text);
+                }
+                Hit::OutputToggle => {
+                    if let Some(current) = self.outputs.iter().find(|o| o.default) {
+                        let color = if self.hot == Some(hit) { theme.text } else { theme.text_dim };
+                        text::draw(cx, &current.name, &right_aligned, rect(r.left, r.top, r.right - 22.0 * s, r.bottom), color);
+                        let chevron = if self.outputs_open { glyphs::CHEVRON_UP } else { glyphs::CHEVRON_DOWN };
+                        text::draw(cx, chevron, &icon, rect(r.right - 20.0 * s, r.top, r.right, r.bottom), color);
+                    }
+                }
+                Hit::Output(i) => {
+                    let Some(output) = self.outputs.get(i) else {
+                        continue;
+                    };
+                    if self.hot == Some(hit) {
+                        fill(r, 8.0 * s, theme.hover);
+                    }
+                    let glyph = match output.kind {
+                        OutputKind::Headphones => glyphs::HEADPHONES,
+                        OutputKind::Bluetooth => glyphs::BLUETOOTH,
+                        OutputKind::Display => glyphs::DISPLAY,
+                        OutputKind::Speakers | OutputKind::Other => glyphs::SPEAKER,
+                    };
+                    text::draw(cx, glyph, &icon, rect(r.left, r.top, r.left + 30.0 * s, r.bottom), theme.text);
+                    let name_color = if output.default { theme.accent } else { theme.text };
+                    text::draw(cx, &output.name, &normal, rect(r.left + 36.0 * s, r.top, r.right - 26.0 * s, r.bottom), name_color);
+                    if output.default {
+                        text::draw(cx, glyphs::CHECK, &icon, rect(r.right - 26.0 * s, r.top, r.right, r.bottom), theme.accent);
+                    }
                 }
                 Hit::Volume | Hit::Brightness => {
                     let label = if hit == Hit::Volume { "Sound" } else { "Display" };
@@ -295,6 +357,10 @@ impl View for QuickSettingsView {
             }
         }
 
+        if let Some(wifi) = &self.wifi {
+            wifi.paint(cx, if let Some(Hit::Wifi(hit)) = self.hot { Some(hit) } else { None });
+        }
+
         let info_top = self.targets.last().map_or(0.0, |(_, r)| r.bottom);
         let info = rect(0.0, info_top, cx.width, info_top + INFO_LINE * s);
         let color = if self.confirm.is_some() { theme.accent } else { theme.text_dim };
@@ -337,9 +403,35 @@ impl View for QuickSettingsView {
         }
         match self.hit(x, y) {
             Some(Hit::Network) => {
-                let page = if matches!(self.status.network, NetState::Wifi { .. }) { "ms-settings:network-wifi" } else { "ms-settings:network" };
-                launch::open(page);
-                self.close();
+                self.wifi = match self.wifi.take() {
+                    Some(_) => None,
+                    None => Some(WifiPanel::open(self.hwnd)),
+                };
+                self.layout();
+            }
+            Some(Hit::Wifi(hit)) => {
+                let outcome = self.wifi.as_mut().map_or(Outcome::Nothing, |w| w.click(hit));
+                self.layout();
+                match outcome {
+                    Outcome::Close => {
+                        self.close();
+                        return true;
+                    }
+                    Outcome::Repaint => {}
+                    Outcome::Nothing => return false,
+                }
+            }
+            Some(Hit::OutputToggle) => {
+                self.outputs = services::audio_outputs();
+                self.outputs_open = !self.outputs_open;
+                self.layout();
+            }
+            Some(Hit::Output(i)) => {
+                if let Some(output) = self.outputs.get(i).filter(|o| !o.default) {
+                    services::set_default_output(&output.id);
+                }
+                self.outputs_open = false;
+                self.layout();
             }
             Some(Hit::Mute) => {
                 services::set_muted(!self.status.volume.is_some_and(|v| v.muted));
@@ -368,6 +460,13 @@ impl View for QuickSettingsView {
 
     fn wheel(&mut self, x: f32, y: f32, delta: i16) -> bool {
         let step = if delta > 0 { 0.05 } else { -0.05 };
+        if let Some(wifi) = self.wifi.as_mut().filter(|w| w.contains(x, y)) {
+            let changed = wifi.wheel(delta);
+            if changed {
+                self.layout();
+            }
+            return changed;
+        }
         match self.hit(x, y) {
             Some(Hit::Volume | Hit::Mute) => services::nudge_volume(step),
             Some(Hit::Brightness) => {

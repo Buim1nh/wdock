@@ -111,7 +111,7 @@ fn create_d3d_device(renderer: Renderer) -> Result<ID3D11Device> {
 pub struct Surface {
     swapchain: IDXGISwapChain1,
     _target: IDCompositionTarget,
-    _visual: IDCompositionVisual,
+    visual: IDCompositionVisual,
 }
 
 impl Surface {
@@ -134,8 +134,14 @@ impl Surface {
             visual.SetContent(&swapchain)?;
             target.SetRoot(&visual)?;
             gfx.dcomp.Commit()?;
-            Ok(Self { swapchain, _target: target, _visual: visual })
+            Ok(Self { swapchain, _target: target, visual })
         }
+    }
+
+    /// The window's root visual (its content is the swap chain); views can
+    /// add child visuals that DWM composes on top.
+    pub fn root(&self) -> &IDCompositionVisual {
+        &self.visual
     }
 
     pub fn resize(&self, width: u32, height: u32) -> Result<()> {
