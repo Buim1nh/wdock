@@ -20,7 +20,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_BRUSH_PROPERTIES, ID2D1Bitmap1,
+    D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1, D2D1_BRUSH_PROPERTIES, D2D1_ELLIPSE, ID2D1Bitmap1,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER,
@@ -39,6 +39,7 @@ use crate::model::config::IslandConfig;
 use crate::model::pomodoro::{self, Phase, Pomodoro};
 use crate::platform::monitors::Monitor;
 use crate::services::media::{self, Command, Media};
+use crate::services::privacy::{self, Sensors};
 use crate::services::{self, NetState, SystemStatus};
 use crate::ui::backdrop::Corners;
 use crate::ui::bar::{self, BarSpec, Button, PaintCx, View};
@@ -72,6 +73,8 @@ const TOP_GAP: f32 = 2.0;
 const IDLE: (f32, f32) = (92.0, 26.0);
 const WIDTH_MEDIA: f32 = 56.0;
 const WIDTH_TIMER: f32 = 64.0;
+/// Extra pill width per active privacy dot (microphone, camera).
+const WIDTH_DOT: f32 = 14.0;
 const NOTICE: (f32, f32) = (280.0, 46.0);
 const EXPANDED: (f32, f32) = (400.0, 158.0);
 const EXPANDED_RADIUS: f32 = 24.0;
@@ -87,6 +90,11 @@ const GLYPH_MUSIC: &str = "\u{E8D6}";
 const GLYPH_TIMER: &str = "\u{E916}";
 const GLYPH_RESET: &str = "\u{E777}";
 const GLYPH_HEADPHONES: &str = "\u{E7F6}";
+const GLYPH_MIC: &str = "\u{E720}";
+const GLYPH_CAMERA: &str = "\u{E722}";
+
+const MIC_COLOR: D2D1_COLOR_F = rgba(255, 159, 10, 1.0);
+const CAMERA_COLOR: D2D1_COLOR_F = rgba(48, 209, 88, 1.0);
 
 // ---- shared state: the Pomodoro and the island windows ----
 
@@ -121,9 +129,15 @@ pub fn configure(config: &IslandConfig) {
             shared.lengths = lengths;
         }
         None => {
-            *shared = Some(Shared { pomodoro: Pomodoro::new(lengths.0, lengths.1), lengths, views: Vec::new() });
+            // The lengths picked on the island win over the config defaults.
+            let saved = std::fs::read_to_string(saved_path()).map_or(lengths, |text| pomodoro::parse_saved(&text, lengths));
+            *shared = Some(Shared { pomodoro: Pomodoro::new(saved.0, saved.1), lengths, views: Vec::new() });
         }
     });
+}
+
+fn saved_path() -> std::path::PathBuf {
+    crate::paths::local_dir().join("pomodoro.txt")
 }
 
 fn pomodoro_state() -> Pomodoro {
@@ -144,7 +158,22 @@ fn reschedule_pomodoro() {
 }
 
 fn pomodoro_act(act: impl FnOnce(&mut Pomodoro, u64)) {
-    shared(|s| act(&mut s.pomodoro, now_ms()));
+    let changed = shared(|s| {
+        let before = s.pomodoro.lengths();
+        act(&mut s.pomodoro, now_ms());
+        let after = s.pomodoro.lengths();
+        (before != after).then_some(after)
+    })
+    .flatten();
+    if let Some(lengths) = changed {
+        let path = saved_path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(err) = std::fs::write(&path, pomodoro::format_saved(lengths)) {
+            log::warn!("cannot save pomodoro lengths: {err}");
+        }
+    }
     reschedule_pomodoro();
     notify_views();
 }
@@ -184,6 +213,10 @@ enum Content {
     Idle,
     Media { timer: bool },
     Timer,
+}
+
+fn dots_width(sensors: Sensors) -> f32 {
+    WIDTH_DOT * (u8::from(sensors.mic) + u8::from(sensors.camera)) as f32
 }
 
 fn compact_size(content: Content) -> (f32, f32) {
@@ -245,6 +278,8 @@ struct PanelLayout {
     play: D2D_RECT_F,
     next: D2D_RECT_F,
     phase: D2D_RECT_F,
+    dec: D2D_RECT_F,
+    inc: D2D_RECT_F,
     time: D2D_RECT_F,
     toggle: D2D_RECT_F,
     reset: D2D_RECT_F,
@@ -264,10 +299,12 @@ impl PanelLayout {
             prev: r(40.0, 118.0, 76.0, 146.0),
             play: r(84.0, 118.0, 124.0, 146.0),
             next: r(132.0, 118.0, 168.0, 146.0),
-            phase: r(214.0, 118.0, 262.0, 146.0),
-            time: r(262.0, 118.0, 320.0, 146.0),
-            toggle: r(326.0, 118.0, 354.0, 146.0),
-            reset: r(358.0, 118.0, 386.0, 146.0),
+            phase: r(176.0, 118.0, 228.0, 146.0),
+            dec: r(228.0, 118.0, 252.0, 146.0),
+            time: r(252.0, 118.0, 308.0, 146.0),
+            inc: r(308.0, 118.0, 332.0, 146.0),
+            toggle: r(338.0, 118.0, 364.0, 146.0),
+            reset: r(366.0, 118.0, 392.0, 146.0),
         }
     }
 }
@@ -332,6 +369,15 @@ fn notice_for(prev: &SystemStatus, next: &SystemStatus) -> Option<Notice> {
     None
 }
 
+/// Announces a sensor that just came into use.
+fn privacy_notice(prev: Sensors, next: Sensors) -> Option<Notice> {
+    match (next.mic && !prev.mic, next.camera && !prev.camera) {
+        (_, true) => Some(Notice { glyph: GLYPH_CAMERA, text: "Camera in use".into(), level: None }),
+        (true, false) => Some(Notice { glyph: GLYPH_MIC, text: "Microphone in use".into(), level: None }),
+        _ => None,
+    }
+}
+
 /// Network identity without the signal strength, which changes constantly.
 fn network_kind(state: &NetState) -> (u8, &str) {
     match state {
@@ -373,6 +419,9 @@ enum Hot {
     Seek,
     Toggle,
     Reset,
+    Label,
+    Dec,
+    Inc,
 }
 
 pub struct Island {
@@ -389,6 +438,7 @@ pub struct Island {
     media: Option<Media>,
     pomodoro: Pomodoro,
     status: SystemStatus,
+    privacy: Sensors,
     notice: Option<Notice>,
     art: Option<(u64, ID2D1Bitmap1)>,
     /// Live preview of the playing window, shown in the cover's place while
@@ -420,6 +470,7 @@ pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &IslandConfig, monitor: 
         media: media::current(),
         pomodoro: pomodoro_state(),
         status: services::status(),
+        privacy: privacy::current(),
         notice: None,
         art: None,
         thumb: None,
@@ -432,7 +483,7 @@ pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &IslandConfig, monitor: 
         hot: None,
     };
     let size = {
-        let (w, h) = compact_size(island.content());
+        let (w, h) = island.compact();
         (w * monitor.scale, h * monitor.scale)
     };
     island.size = size;
@@ -453,6 +504,12 @@ impl Island {
         }
     }
 
+    /// The compact size in DIPs: the content plus a dot per sensor in use.
+    fn compact(&self) -> (f32, f32) {
+        let (w, h) = compact_size(self.content());
+        (w + dots_width(self.privacy), h)
+    }
+
     /// The size the pill is heading for, in pixels.
     fn target(&self) -> (f32, f32) {
         let (w, h) = if self.hovered {
@@ -460,7 +517,7 @@ impl Island {
         } else if self.notice.is_some() {
             NOTICE
         } else {
-            compact_size(self.content())
+            self.compact()
         };
         (w * self.scale, h * self.scale)
     }
@@ -557,6 +614,9 @@ impl Island {
             (p.next, Hot::Next, media.is_some_and(|m| m.can_next)),
             (p.toggle, Hot::Toggle, true),
             (p.reset, Hot::Reset, self.pomodoro.is_active()),
+            (p.phase, Hot::Label, !self.pomodoro.is_active()),
+            (p.dec, Hot::Dec, !self.pomodoro.is_active()),
+            (p.inc, Hot::Inc, !self.pomodoro.is_active()),
         ]
         .into_iter()
         .find(|&(r, _, enabled)| enabled && contains(r, x, y))
@@ -598,6 +658,7 @@ impl View for Island {
                 self.media = media::current();
                 self.pomodoro = pomodoro_state();
                 self.status = services::status();
+                self.privacy = privacy::current();
                 self.size = {
                     let (w, h) = self.target();
                     (w, h)
@@ -616,12 +677,15 @@ impl View for Island {
         self.media = media::current();
         self.pomodoro = pomodoro_state();
         let status = services::status();
+        let sensors = privacy::current();
+        let notice = notice_for(&self.status, &status).or_else(|| privacy_notice(self.privacy, sensors));
         if self.notices
             && !self.hovered
-            && let Some(notice) = notice_for(&self.status, &status)
+            && let Some(notice) = notice
         {
             self.show_notice(notice);
         }
+        self.privacy = sensors;
         self.status = status;
         self.animate();
         self.schedule();
@@ -680,6 +744,13 @@ impl View for Island {
             }
             Some(Hot::Toggle) => pomodoro_act(|p, now| p.toggle(now)),
             Some(Hot::Reset) => pomodoro_act(|p, _| p.reset()),
+            Some(Hot::Label) => pomodoro_act(|p, _| p.select(if p.phase() == Phase::Work { Phase::Break } else { Phase::Work })),
+            Some(Hot::Dec) => pomodoro_act(|p, _| {
+                p.step(false);
+            }),
+            Some(Hot::Inc) => pomodoro_act(|p, _| {
+                p.step(true);
+            }),
             None => {}
         }
         false
@@ -722,7 +793,7 @@ impl View for Island {
         }
         let (w, h) = (cx.width, cx.height);
         // From this content's own compact width, so a pill at rest is fully opaque.
-        let e = expansion_from(w, compact_size(self.content()).0, s);
+        let e = expansion_from(w, self.compact().0, s);
         let radius = (h / 2.0).min(lerp(h / 2.0, EXPANDED_RADIUS * s, e));
 
         let pill = rect(0.0, 0.0, w, h);
@@ -960,6 +1031,18 @@ impl Island {
         let content = self.content();
         let mut left = pad;
         let mut right = w - pad;
+        // Privacy dots sit at the far left; everything else moves over.
+        let dot = 3.5 * s;
+        for (on, color) in [(self.privacy.mic, MIC_COLOR), (self.privacy.camera, CAMERA_COLOR)] {
+            if !on {
+                continue;
+            }
+            if let Ok(brush) = cx.gfx.brush(with_alpha(color, alpha)) {
+                let ellipse = D2D1_ELLIPSE { point: windows_numerics::Vector2 { X: left + dot, Y: mid }, radiusX: dot, radiusY: dot };
+                unsafe { cx.dc.FillEllipse(&ellipse, &brush) };
+            }
+            left += WIDTH_DOT * s;
+        }
 
         if let Content::Media { .. } = content {
             let side = 18.0 * s;
@@ -1081,8 +1164,22 @@ impl Island {
 
         let phase = self.pomodoro.phase();
         let label = if phase == Phase::Work { "Focus" } else { "Break" };
-        let color = if self.pomodoro.is_active() { phase_color(phase) } else { DIM };
+        let idle = !self.pomodoro.is_active();
+        let color = phase_color(phase);
+        let hover = |hot: Hot, r: D2D_RECT_F| {
+            if idle
+                && self.hot == Some(hot)
+                && let Ok(brush) = cx.gfx.brush(with_alpha(CONTROL, alpha))
+            {
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(r, 8.0 * s), &brush) };
+            }
+        };
+        hover(Hot::Label, p.phase);
         text::draw(cx, label, &formats.small, p.phase, with_alpha(color, alpha));
+        for (hot, r, glyph) in [(Hot::Dec, p.dec, "−"), (Hot::Inc, p.inc, "+")] {
+            hover(hot, r);
+            text::draw(cx, glyph, &formats.time, r, with_alpha(if idle { TEXT } else { rgba(255, 255, 255, 0.2) }, alpha));
+        }
         text::draw(cx, &pomodoro::clock(self.pomodoro.remaining_ms(now)), &formats.time, p.time, with_alpha(TEXT, alpha));
         let toggle = if self.pomodoro.is_running() { GLYPH_PAUSE } else { GLYPH_PLAY };
         button(self, p.toggle, Hot::Toggle, toggle, true);
@@ -1153,7 +1250,7 @@ mod tests {
     #[test]
     fn panel_buttons_do_not_overlap() {
         let p = PanelLayout::new(1.0);
-        let rects = [p.prev, p.play, p.next, p.toggle, p.reset];
+        let rects = [p.prev, p.play, p.next, p.phase, p.dec, p.time, p.inc, p.toggle, p.reset];
         for (i, a) in rects.iter().enumerate() {
             assert!(a.right <= EXPANDED.0 && a.bottom <= EXPANDED.1);
             for b in &rects[i + 1..] {
@@ -1227,6 +1324,18 @@ mod tests {
         let other = SystemStatus { network: NetState::Wired, ..Default::default() };
         assert_eq!(notice_for(&wifi(40), &other).unwrap().text, "Ethernet connected");
         assert_eq!(notice_for(&other, &SystemStatus::default()).unwrap().text, "Offline");
+    }
+
+    #[test]
+    fn privacy_notice_only_on_new_use() {
+        let off = Sensors::default();
+        let mic = Sensors { mic: true, camera: false };
+        let both = Sensors { mic: true, camera: true };
+        assert_eq!(privacy_notice(off, mic).unwrap().text, "Microphone in use");
+        assert_eq!(privacy_notice(mic, both).unwrap().text, "Camera in use");
+        assert_eq!(privacy_notice(both, mic), None);
+        assert_eq!(privacy_notice(mic, mic), None);
+        assert_eq!(dots_width(both), 2.0 * WIDTH_DOT);
     }
 
     #[test]

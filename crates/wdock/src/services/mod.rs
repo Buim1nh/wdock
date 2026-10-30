@@ -10,6 +10,7 @@ pub mod icons;
 pub mod media;
 pub mod network;
 pub mod power;
+pub mod privacy;
 pub mod wifi;
 
 use std::cell::RefCell;
@@ -122,8 +123,26 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
                 s.status.volume = s.audio.as_ref().and_then(audio::Audio::state);
                 s.status.audio_device = s.status.audio_device.wrapping_add(1);
             }
-            KIND_AUDIO_LIST => s.status.audio_devices = s.status.audio_devices.wrapping_add(1),
-            KIND_AUDIO => s.status.volume = s.audio.as_ref().and_then(audio::Audio::state),
+            // A device was added, removed or changed state: the endpoint we
+            // listen on may be gone (a USB or Bluetooth device that reconnected
+            // keeps its id but not its registration), so rebind and re-read.
+            KIND_AUDIO_LIST => {
+                s.status.audio_devices = s.status.audio_devices.wrapping_add(1);
+                if let Some(audio) = &mut s.audio {
+                    audio.attach_default();
+                }
+                s.status.volume = s.audio.as_ref().and_then(audio::Audio::state);
+            }
+            KIND_AUDIO => {
+                audio::VOLUME_PENDING.store(false, std::sync::atomic::Ordering::Release);
+                s.status.volume = s.audio.as_ref().and_then(audio::Audio::state);
+                if s.status.volume.is_none()
+                    && let Some(audio) = &mut s.audio
+                {
+                    audio.attach_default();
+                    s.status.volume = audio.state();
+                }
+            }
             KIND_NETWORK => s.status.network = s.network.state(),
             KIND_BRIGHTNESS => {
                 s.status.brightness = (lparam.0 != brightness::UNSUPPORTED).then(|| lparam.0.clamp(0, 100) as u8);
