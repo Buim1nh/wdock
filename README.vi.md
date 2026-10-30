@@ -110,10 +110,30 @@ Explorer vẫn là shell của Windows ("chế độ lai"), wdock chạy song so
 ### Từ bản phát hành (khuyên dùng)
 
 1. Tải `wdock-setup-<version>.exe` ở [bản phát hành mới nhất](https://github.com/Buim1nh/wdock/releases/latest).
-2. Chạy file đó. Bộ cài hỏi một lần, rồi cài cho tài khoản của bạn (không cần admin), khởi động wdock và thêm wdock vào **Settings > Apps**. Chạy bộ cài bản mới hơn thì sẽ cập nhật đè lên bản cũ.
+2. Chạy file đó, chọn các tùy chọn rồi bấm **Install**. Bộ cài cài wdock cho tài khoản của bạn (không cần admin), khởi động wdock và thêm nó vào **Settings > Apps**.
 3. Windows SmartScreen có thể cảnh báo vì file chưa được ký số: chọn **More info > Run anyway**.
 
-Để gỡ, vào **Settings > Apps > wdock > Uninstall**, hoặc chạy `%LOCALAPPDATA%\Programs\wdock\uninstall.exe --uninstall`. Thêm `/S` vào bộ cài hoặc trình gỡ để chạy im lặng.
+![Cửa sổ cài đặt](docs/media/setup.png)
+
+Cửa sổ cài đặt có các tùy chọn:
+
+| Tùy chọn | Mặc định |
+|---|---|
+| Tự chạy wdock khi đăng nhập | bật |
+| Chạy wdock ngay khi cài xong | bật |
+| Thêm vào Start menu | bật |
+| Cài thêm agent-usage-bar (mức sử dụng AI agent trên khay) | tắt (bật sẵn nếu máy đã cài) |
+| Theme: theo Windows, tối, sáng | theo Windows |
+| Nền: trong mờ (acrylic) hoặc đặc | trong mờ |
+| Top bar: trên mọi màn hình hoặc chỉ màn hình chính | mọi màn hình |
+| Dock: ẩn khi có cửa sổ che, luôn tự ẩn, luôn hiện | ẩn khi bị che |
+| Dynamic Island và equalizer chuyển động | bật, bật |
+
+Chạy lại bộ cài sẽ cập nhật wdock và hiện các thiết lập hiện tại, nên bạn cũng dùng nó để đổi thiết lập được. Chỉ những tùy chọn bạn đổi mới được ghi vào `config.toml`.
+
+Để gỡ wdock, vào **Settings > Apps > wdock > Uninstall**, hoặc chạy `%LOCALAPPDATA%\Programs\wdock\uninstall.exe --uninstall`. agent-usage-bar có mục riêng trong Settings > Apps.
+
+Để cài im lặng, chạy `wdock-setup-<version>.exe /S`, có thể thêm `/WithUsage /NoSignIn /NoStart /NoShortcut /NoIsland /NoEqualizer /Theme=auto|dark|light /Backdrop=acrylic|solid /TopBar=all|primary /AutoHide=smart|on|off`. Nếu cài im lặng bị lỗi, lý do được ghi vào `%TEMP%\wdock-setup.log`. Trình gỡ cũng nhận cờ `/S`.
 
 Bản phát hành còn có file zip dạng portable gồm `wdock.exe` và các script cài đặt.
 

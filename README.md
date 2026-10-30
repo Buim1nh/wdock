@@ -110,10 +110,30 @@ Explorer stays the Windows shell ("hybrid mode"), and wdock runs alongside it:
 ### From a release (recommended)
 
 1. Download `wdock-setup-<version>.exe` from the [latest release](https://github.com/Buim1nh/wdock/releases/latest).
-2. Run it. It asks once, then installs for your account (no admin), starts wdock and lists it in **Settings > Apps**. Running a newer setup later updates in place.
+2. Run it and pick your options, then **Install**. It installs for your account (no admin), starts wdock and lists it in **Settings > Apps**.
 3. Windows SmartScreen may warn because the file is not code-signed: choose **More info > Run anyway**.
 
-To remove it, use **Settings > Apps > wdock > Uninstall**, or run `%LOCALAPPDATA%\Programs\wdock\uninstall.exe --uninstall`. Add `/S` to either the setup or the uninstaller for a silent run.
+![The setup window](docs/media/setup.png)
+
+The setup window offers:
+
+| Option | Default |
+|---|---|
+| Start wdock when I sign in | on |
+| Start wdock when setup finishes | on |
+| Add to the Start menu | on |
+| Also install agent-usage-bar (AI agent usage in the tray) | off (on when it is already installed) |
+| Theme: follow Windows, dark, light | follow Windows |
+| Background: translucent (acrylic) or solid | translucent |
+| Top bar: on every monitor or the main one only | every monitor |
+| Dock: hide when a window covers it, always auto-hide, always visible | hide when covered |
+| Dynamic Island, and its animated equalizer | on, on |
+
+Running the setup again updates wdock and shows your current settings, so you can also use it to change them. Only the options you change are written to `config.toml`.
+
+To remove wdock, use **Settings > Apps > wdock > Uninstall**, or run `%LOCALAPPDATA%\Programs\wdock\uninstall.exe --uninstall`. agent-usage-bar has its own entry in Settings > Apps.
+
+For a silent install, run `wdock-setup-<version>.exe /S`, optionally with `/WithUsage /NoSignIn /NoStart /NoShortcut /NoIsland /NoEqualizer /Theme=auto|dark|light /Backdrop=acrylic|solid /TopBar=all|primary /AutoHide=smart|on|off`. A silent run that fails writes the reason to `%TEMP%\wdock-setup.log`. The uninstallers take `/S` too.
 
 The release also has a portable zip with `wdock.exe` and the install scripts.
 
