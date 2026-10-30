@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-const DEFAULT_CONFIG: &str = include_str!("default_config.toml");
+pub const DEFAULT_CONFIG: &str = include_str!("default_config.toml");
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]

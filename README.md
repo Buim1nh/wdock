@@ -189,12 +189,24 @@ Win+Alt+/ or the keyboard button in the top bar shows these on a card you can dr
 
 If another app already owns a combination, wdock logs it and skips it.
 
+## Settings
+
+Changing options does not need the setup again. Click the status icons in the top bar, then **wdock settings**. The panel changes:
+
+- theme, backdrop, top bar on all monitors or only the primary one
+- dock auto-hide, Dynamic Island, animated equalizer
+- start at sign-in (a per-user scheduled task named `wdock`, the same one the setup creates)
+
+Each change is saved to `config.toml` (comments and other keys are kept) and applies at once. **Open config file** opens the file in your default editor for the other keys.
+
+Keys that are not in the panel (for example `[workspaces]`, `[dock] icon_size` or the shortcuts) still need a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
+
 ## Configuration
 
 The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a commented template on first run.
 
 - Save it as UTF-8 without a BOM.
-- Changes apply after a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
+- Edits made in the file apply after a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
 
 | Section | Main settings |
 |---|---|

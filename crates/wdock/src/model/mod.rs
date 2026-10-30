@@ -1,6 +1,7 @@
 pub mod apps;
 pub mod calendar;
 pub mod config;
+pub mod config_edit;
 pub mod pins;
 pub mod pomodoro;
 pub mod search;
