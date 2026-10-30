@@ -82,7 +82,7 @@ A pill at the top centre of each monitor that expands on hover.
   - A moving equalizer while something plays. Windows' compositor (DWM) plays this animation, so wdock does no work per frame.
 - **Pomodoro:** start, pause and reset from the expanded island. While idle, click the Focus / Break label to choose which length to edit, then use − / + (Focus 5-90 min in steps of 5, Break 1-30 min in steps of 1). The choice is remembered in `%LOCALAPPDATA%\wdock\pomodoro.txt`; `pomodoro_work` / `pomodoro_break` stay the defaults. The compact pill shows the minutes left, and a chime plus a notice mark the end of each focus or break.
 - **Privacy dots:** an orange dot while an app is using the microphone and a green one for the camera, with a short notice when one starts. wdock watches Windows' capability consent store with registry change notifications, so it never polls.
-- **Notices:** the island briefly expands when volume, brightness, charging, battery, network or the audio device change. Windows' own pop-ups are left alone.
+- **Notices:** the island briefly expands when volume, brightness, charging, battery, network or the audio device change, including volume changed by headset or keyboard buttons. Changes made with wdock's own sliders do not expand it. Windows' own pop-ups are left alone.
 
 ### Launcher and windows
 
