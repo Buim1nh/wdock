@@ -56,8 +56,11 @@ pub struct SystemStatus {
     pub volume: Option<Volume>,
     pub network: NetState,
     pub battery: Option<Battery>,
-    /// `None` until known, or when the display has no software control.
+    /// Built-in panel level; `None` until known, or without software control.
     pub brightness: Option<u8>,
+    /// Every display whose brightness can be changed (built-in panel first,
+    /// then DDC/CI monitors).
+    pub displays: Vec<brightness::Display>,
     /// Counts default-output-device changes (headphones plugged in, ...).
     pub audio_device: u32,
     /// Counts changes to the set of output devices (added, removed, default moved).
@@ -86,6 +89,7 @@ pub fn start(target: HWND) {
             network: network.state(),
             battery: power::battery(),
             brightness: None,
+            displays: Vec::new(),
             audio_device: 0,
             audio_devices: 0,
         },
@@ -145,7 +149,9 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
             }
             KIND_NETWORK => s.status.network = s.network.state(),
             KIND_BRIGHTNESS => {
-                s.status.brightness = (lparam.0 != brightness::UNSUPPORTED).then(|| lparam.0.clamp(0, 100) as u8);
+                s.status.displays = brightness::displays();
+                s.status.brightness =
+                    s.status.displays.iter().find(|d| d.id == brightness::BUILTIN).map(|d| d.percent);
             }
             _ => {}
         }
@@ -200,6 +206,13 @@ pub fn nudge_volume(delta: f32) {
     });
 }
 
-pub fn set_brightness(percent: u8) {
-    with(|s| s.brightness.set(percent));
+/// Sets a display's brightness (`brightness::Display::id`). While a slider is
+/// dragged pass `last = false`; the final value is always written.
+pub fn set_brightness(id: u32, percent: u8, last: bool) {
+    with(|s| s.brightness.set(id, percent, last));
+}
+
+/// Looks for displays again (display change, resume). Runs on the worker.
+pub fn refresh_displays() {
+    with(|s| s.brightness.detect());
 }

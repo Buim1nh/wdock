@@ -27,7 +27,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DeregisterShellHookWindow, DestroyWindow, DispatchMessageW,
-    GetForegroundWindow, GetMessageW, KillTimer, MSG, PBT_APMPOWERSTATUSCHANGE, PBT_POWERSETTINGCHANGE,
+    GetForegroundWindow, GetMessageW, KillTimer, MSG, PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE,
     PostMessageW, PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SetTimer,
     TranslateMessage, WM_APP, WM_DESTROY, WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_POPUP,
@@ -543,6 +543,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             LRESULT(0)
         }
         WM_POWERBROADCAST => {
+            if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC {
+                services::refresh_displays();
+            }
             if (wparam.0 as u32 == PBT_POWERSETTINGCHANGE || wparam.0 as u32 == PBT_APMPOWERSTATUSCHANGE)
                 && services::refresh_power()
             {
@@ -602,6 +605,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         WM_APP_REBUILD => {
             if wparam.0 == RebuildReason::DeviceLost as usize {
                 with_shell(|shell| shell.pending_device_lost = true);
+            }
+            if wparam.0 == RebuildReason::Display as usize {
+                services::refresh_displays();
             }
             unsafe { SetTimer(Some(hwnd), TIMER_REBUILD, REBUILD_DEBOUNCE_MS, None) };
             LRESULT(0)
