@@ -47,7 +47,7 @@ Copy-Item $built $exe -Force
 $fonts = Join-Path $root 'fonts'
 $fontFiles = Get-ChildItem -LiteralPath $fonts -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.ttf', '.otf' }
 if ($fontFiles) {
-    $fontDest = Join-Path $env:LOCALAPPDATA 'wdockonts'
+    $fontDest = Join-Path $env:LOCALAPPDATA 'wdock\fonts'
     New-Item -ItemType Directory -Force $fontDest | Out-Null
     $fontFiles | Copy-Item -Destination $fontDest -Force
 }
