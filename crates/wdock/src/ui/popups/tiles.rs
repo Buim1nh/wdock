@@ -76,7 +76,7 @@ pub fn paint(
     let inset = INSET * s;
     let title_top = tile.bottom - TITLE_HEIGHT * s;
     let preview = rect(tile.left + inset, tile.top + inset, tile.right - inset, title_top - 2.0 * s);
-    let shown = (!model.is_hidden(hwnd)).then_some(thumb).flatten().and_then(|t| t.place(preview, 255));
+    let shown = thumb.and_then(|t| t.place(preview, 255));
     if shown.is_none() {
         if let Some(t) = thumb {
             t.hide();
@@ -84,7 +84,7 @@ pub fn paint(
         let size = ((preview.right - preview.left).min(preview.bottom - preview.top) * 0.45).min(64.0 * s);
         let (cx_, cy) = ((preview.left + preview.right) / 2.0, (preview.top + preview.bottom) / 2.0);
         let dest = rect(cx_ - size / 2.0, cy - size / 2.0, cx_ + size / 2.0, cy + size / 2.0);
-        draw_icon(cx, model, bitmaps, hwnd, dest, if model.is_hidden(hwnd) { 0.7 } else { 1.0 });
+        draw_icon(cx, model, bitmaps, hwnd, dest, 1.0);
     }
 
     let icon = ICON * s;

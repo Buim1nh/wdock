@@ -7,6 +7,8 @@ pub mod apps_index;
 pub mod audio;
 pub mod brightness;
 pub mod icons;
+pub mod lyrics;
+pub mod lyrics_bridge;
 pub mod media;
 pub mod network;
 pub mod power;

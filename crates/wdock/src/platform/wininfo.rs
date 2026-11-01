@@ -11,8 +11,9 @@ use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersio
 use windows::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    QueryFullProcessImageNameW,
+    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess,
 };
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegGetValueW, RRF_RT_REG_DWORD};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GA_ROOT, GA_ROOTOWNER, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
@@ -101,6 +102,31 @@ pub fn content_process_id(hwnd: HWND) -> u32 {
             return process_id(core);
         }
     process_id(hwnd)
+}
+
+/// Mirrors Windows' taskbar End task toggle; a missing setting is disabled.
+pub fn end_task_enabled() -> bool {
+    let mut value = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    unsafe { RegGetValueW(HKEY_CURRENT_USER,
+        w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings"),
+        w!("TaskbarEndTask"), RRF_RT_REG_DWORD, None, Some((&raw mut value).cast()), Some(&mut size)).is_ok() && value != 0 }
+}
+
+/// Terminate only processes still owning the windows captured when the menu opened.
+pub fn end_tasks(targets: &[(HWND, u32)]) {
+    let mut handled = Vec::new();
+    for &(hwnd, pid) in targets {
+        if pid == 0 || pid == unsafe { GetCurrentProcessId() } || handled.contains(&pid) || content_process_id(hwnd) != pid { continue; }
+        handled.push(pid);
+        match unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) } {
+            Ok(handle) => unsafe {
+                if let Err(error) = TerminateProcess(handle, 1) { log::warn!("could not end task {pid}: {error}"); }
+                let _ = CloseHandle(handle);
+            },
+            Err(error) => log::warn!("could not open task {pid} for termination: {error}"),
+        }
+    }
 }
 
 pub struct ProcessInfo {
@@ -237,11 +263,6 @@ pub fn is_fullscreen_app(hwnd: HWND) -> bool {
         return false;
     }
     !matches!(class_name(root).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") && is_fullscreen(root)
-}
-
-/// Hides without activating anything; async so a hung app cannot block us.
-pub fn hide(hwnd: HWND) {
-    let _ = unsafe { ShowWindowAsync(hwnd, windows::Win32::UI::WindowsAndMessaging::SW_HIDE) };
 }
 
 /// Shows in its previous state (minimized stays minimized) without activating.

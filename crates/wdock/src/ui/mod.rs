@@ -1,10 +1,12 @@
 pub mod backdrop;
+pub mod battery;
 pub mod bar;
 pub mod dock;
 pub mod eq_layer;
 pub mod gfx;
 pub mod glyphs;
 pub mod island;
+mod kawarp;
 pub mod popup;
 pub mod popups;
 pub mod text;

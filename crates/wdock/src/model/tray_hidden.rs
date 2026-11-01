@@ -39,6 +39,19 @@ pub fn load() -> Vec<HiddenApp> {
     fs::read_to_string(path()).map(|text| parse(&text)).unwrap_or_default()
 }
 
+pub fn load_shown() -> Vec<HiddenApp> {
+    fs::read_to_string(crate::paths::local_dir().join("tray-shown.txt"))
+        .map(|text| parse(&text)).unwrap_or_default()
+}
+
+pub fn save_shown(apps: &[HiddenApp]) {
+    let path = crate::paths::local_dir().join("tray-shown.txt");
+    if let Some(dir) = path.parent() { let _ = fs::create_dir_all(dir); }
+    if let Err(err) = fs::write(&path, format(apps)) {
+        log::warn!("could not save {}: {err}", path.display());
+    }
+}
+
 pub fn save(apps: &[HiddenApp]) {
     let path = path();
     if let Some(dir) = path.parent() {

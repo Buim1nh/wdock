@@ -45,7 +45,7 @@ All screenshots are 1920×1080.
 ### Top bar
 
 - Launcher button and overview button.
-- Workspace pills (4 workspaces per monitor by default).
+- Windows virtual desktop buttons, synchronized across monitors (Windows 11 24H2 build 26100.2605 or later 26100 builds, or 25H2 build 26200). On other builds the buttons are hidden because the shell interface is undocumented.
 - Title of the active window.
 - System tray, hosted by wdock itself: tray icons, balloons and overflow work as in the taskbar.
 - Volume, network and battery indicators that open quick settings.
@@ -74,6 +74,16 @@ All screenshots are 1920×1080.
 
 ### Dynamic Island
 
+The expanded Island has Media and Files tabs. In wdock settings, enable or disable **Island file shelf** and use **Order (M/F)** to change their order. Media includes the Pomodoro controls.
+
+Lyrics requires the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view. The bridge sends displayed lyrics to WDock over loopback.
+
+Lyrics requires the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view. The bridge sends displayed lyrics to WDock over loopback.
+
+Choose **Island style** in wdock settings for a floating Island or a top-edge Notch; **Notch width** adjusts its compact width. Scroll horizontally over the expanded panel to switch tabs. Scroll up over the tab row to collapse it, then scroll down over the compact shape to reopen it. Vertical scrolling over Files still scrolls the file list.
+
+- **Files:** drag files or folders from Explorer onto the Island, then drag an entry out to a compatible app, click it to open, or use × to remove its reference. Scroll the list if needed. The shelf stores up to 32 paths, not file contents; moving or deleting the original can make a reference unavailable.
+
 A pill at the top centre of each monitor that expands on hover.
 
 - **Now playing**, for any app that shows Windows' media controls (Spotify, browsers, media players):
@@ -82,16 +92,17 @@ A pill at the top centre of each monitor that expands on hover.
   - A moving equalizer while something plays. Windows' compositor (DWM) plays this animation, so wdock does no work per frame.
 - **Pomodoro:** start, pause and reset from the expanded island. While idle, click the Focus / Break label to choose which length to edit, then use − / + (Focus 5-90 min in steps of 5, Break 1-30 min in steps of 1). The choice is remembered in `%LOCALAPPDATA%\wdock\pomodoro.txt`; `pomodoro_work` / `pomodoro_break` stay the defaults. The compact pill shows the minutes left, and a chime plus a notice mark the end of each focus or break.
 - **Privacy dots:** an orange dot while an app is using the microphone and a green one for the camera, with a short notice when one starts. wdock watches Windows' capability consent store with registry change notifications, so it never polls.
-- **Notices:** the island briefly expands when volume, brightness, charging, battery, network or the audio device change, including volume changed by headset or keyboard buttons. Changes made with wdock's own sliders do not expand it. Windows' own pop-ups are left alone.
+- **Notices:** the island briefly expands when brightness, charging, battery, network or the audio device change. Changes made with wdock's own sliders do not expand it. Windows' own pop-ups are left alone, including its volume indicator.
 
 ### Launcher and windows
 
 - **Launcher:** fuzzy search over installed apps (Win32 and Store) and Settings pages.
-- **Overview** of the current workspace's windows (the button next to the launcher, or a click on the active workspace number), and **virtual workspaces** per monitor. Click a workspace number to switch to it.
+- **Overview** of the current Windows desktop's windows. Click a desktop number to switch; drag an overview window to a desktop to move it.
 
 ### Tray icons
 
-- Right-click an icon in the top bar and choose **Hide from top bar** to move it into the overflow chevron. The chevron appears only while something is hidden. **Show on top bar** moves it back.
+- Drag an icon onto the chevron to hide it, or drag one from the popup onto the top bar to show it. The right-click menu also offers **Hide from top bar** and **Show on top bar**.
+- wdock reads Windows' notification-area preferences when it can identify an icon; changes in Windows are followed unless an explicit wdock choice overrides them.
 - The choice is saved per app in `%LOCALAPPDATA%\wdock	ray-hidden.txt`, matched by the executable's name (and by the icon's GUID when the app gives one).
 - The same menu has **Open the app's menu**, which passes the click on to the app.
 
@@ -199,7 +210,7 @@ Changing options does not need the setup again. Click the status icons in the to
 
 Each change is saved to `config.toml` (comments and other keys are kept) and applies at once. **Open config file** opens the file in your default editor for the other keys.
 
-Keys that are not in the panel (for example `[workspaces]`, `[dock] icon_size` or the shortcuts) still need a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
+Keys that are not in the panel (for example `[dock] icon_size`) still need a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
 
 ## Configuration
 
@@ -214,11 +225,10 @@ The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a
 | `[performance]` | `renderer` = `"software"` (WARP, about 10 MB, never wakes a discrete GPU) or `"gpu"` |
 | `[topbar]` | `height` (30), `monitors` (`"all"` or `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible` icons before the overflow chevron (12), `overflow` executable fragments always hidden |
-| `[dock]` | `icon_size` (32), `monitors` (`"primary"`), `windows` (`"all"` or `"this-monitor"`), `magnification` (2.0), `auto_hide` (`"smart"`, `"on"`, `"off"`), `pinned` |
-| `[workspaces]` | `count` per monitor (4, up to 9) |
+| `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` or `"glass"`), optional `hover_size`, legacy `magnification` (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
 | `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
 
-Pinning, unpinning or reordering from the dock saves the list to `%LOCALAPPDATA%\wdock\pinned.txt`, which then takes precedence over `pinned`; delete that file to go back to the config.
+When no wdock pin list exists, wdock imports Windows taskbar pins in order and copies their shortcuts to its own data directory. Subsequent changes are saved only to `%LOCALAPPDATA%\wdock\pinned.txt`; they do not change Windows taskbar pins. If import fails, the configuration list is used temporarily and import is retried at the next start. The Windows interface used for the import is undocumented.
 
 State and logs live in `%LOCALAPPDATA%\wdock\`:
 
@@ -226,8 +236,7 @@ State and logs live in `%LOCALAPPDATA%\wdock\`:
 |---|---|
 | `logs\wdock.log`, `logs\wdock-guard.log` | logs (rotated at 2 MB) |
 | `pinned.txt` | pinned apps, in dock order |
-| `tray-hidden.txt` | tray icons hidden from the top bar |
-| `hidden.txt` | windows parked in other workspaces |
+| `tray-hidden.txt`, `tray-shown.txt` | explicit tray icon placement choices |
 | `taskbar.txt` | explorer's original auto-hide state |
 
 ## Troubleshooting
@@ -250,7 +259,7 @@ The script:
 
 1. Removes the sign-in task (and the `Run` key entry left by older installs).
 2. Stops the guard, then the shell.
-3. Restores explorer's taskbar and any windows parked in other workspaces.
+3. Restores explorer's taskbar (and any windows an older version left hidden).
 
 `-RemoveFiles` also deletes the installed binary, and `-RemoveData` also deletes logs, caches and state. Your configuration is kept either way.
 
@@ -280,7 +289,7 @@ The source is in `crates/wdock/src`:
 | `ui/` | Direct2D bars, the dock, the island, popups, composition layers |
 | `platform/` | Win32 wrappers, the tray host, AppBars, window events |
 | `services/` | audio, network and Wi-Fi, power, brightness, media session, app index, icons |
-| `model/` | configuration, windows and workspaces, tray, search, Pomodoro |
+| `model/` | configuration, windows, tray, search, Pomodoro |
 
 ## Measurements
 

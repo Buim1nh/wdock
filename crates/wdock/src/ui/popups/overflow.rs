@@ -27,6 +27,7 @@ pub struct OverflowView {
 impl OverflowView {
     pub fn new(config: TrayConfig, anchor: RECT, monitor: RECT, scale: f32) -> Self {
         let mut view = Self { config, anchor, monitor, scale, ids: Vec::new(), revision: u64::MAX, strip: TrayStrip::default() };
+        view.strip.set_overflow(true);
         view.refresh();
         view
     }

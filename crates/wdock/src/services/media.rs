@@ -35,19 +35,21 @@ use windows::core::{Interface, Ref, Result, RuntimeType};
 
 /// The media snapshot changed; read it with `current()`.
 pub const WM_APP_MEDIA: u32 = WM_APP + 22;
-/// Album art is decoded to this square size (pixels), enough for the expanded island.
+/// Maximum side of decoded artwork in pixels.
 const ART_PX: u32 = 112;
 /// Timeline events within this much of the extrapolated position are ignored.
 const POSITION_SLACK_MS: u64 = 1500;
 
 /// Premultiplied BGRA pixels of the current track's cover.
 pub struct Art {
-    pub size: u32,
+    pub width: u32,
+    pub height: u32,
     pub pixels: Vec<u8>,
 }
 
 #[derive(Clone)]
 pub struct Media {
+    pub source_app_id: String,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -63,6 +65,7 @@ pub struct Media {
     /// Changes whenever the cover does.
     pub art_id: u64,
     pub art: Option<Arc<Art>>,
+    pub app_icon: Option<Arc<Art>>,
     /// `art` is the playing app's icon, not a cover (the source set none).
     pub art_is_icon: bool,
 }
@@ -104,6 +107,7 @@ static SENDER: Mutex<Option<Sender<Event>>> = Mutex::new(None);
 
 /// Starts the worker; `target` receives `WM_APP_MEDIA`. Does nothing if running.
 pub fn start(target: HWND) {
+    crate::services::lyrics_bridge::start();
     let Ok(mut sender) = SENDER.lock() else {
         return;
     };
@@ -199,6 +203,8 @@ struct ArtCache {
     id: u64,
     art: Option<Arc<Art>>,
     is_icon: bool,
+    app_id: String,
+    app_icon: Option<Arc<Art>>,
 }
 
 fn work(tx: &Sender<Event>, rx: &Receiver<Event>) -> Result<()> {
@@ -323,9 +329,16 @@ fn snapshot(session: &Session, wic: Option<&IWICImagingFactory>, cache: &mut Art
     let artist = props.Artist()?.to_string();
     let album = props.AlbumTitle()?.to_string();
     let app_id = session.SourceAppUserModelId().map(|id| id.to_string()).unwrap_or_default();
+    let key = format!("{app_id}\n{title}\n{artist}\n{album}");
+
+    if cache.app_id != app_id || (cache.app_icon.is_none() && cache.key != key) {
+        cache.app_id.clone_from(&app_id);
+        cache.app_icon = wic.filter(|_| !app_id.is_empty())
+            .and_then(|wic| app_icon(wic, &app_id).inspect_err(|err| log::debug!("app icon for {app_id}: {err}")).ok())
+            .map(Arc::new);
+    }
 
     // Fetch the cover only when the track changed.
-    let key = format!("{app_id}\n{title}\n{artist}\n{album}");
     if cache.key != key {
         cache.key = key;
         cache.id += 1;
@@ -337,11 +350,8 @@ fn snapshot(session: &Session, wic: Option<&IWICImagingFactory>, cache: &mut Art
         // Web pages often set no artwork (Edge passes on only what the page
         // declares); show which app is playing instead.
         cache.is_icon = false;
-        if cache.art.is_none()
-            && let Some(wic) = wic
-            && !app_id.is_empty()
-        {
-            cache.art = app_icon(wic, &app_id).inspect_err(|err| log::debug!("app icon for {app_id}: {err}")).ok().map(Arc::new);
+        if cache.art.is_none() {
+            cache.art.clone_from(&cache.app_icon);
             cache.is_icon = cache.art.is_some();
         }
     }
@@ -350,6 +360,7 @@ fn snapshot(session: &Session, wic: Option<&IWICImagingFactory>, cache: &mut Art
     let controls = info.Controls()?;
     let (position_ms, length_ms) = timeline(session).unwrap_or((0, 0));
     Ok(Media {
+        source_app_id: app_id,
         title,
         artist,
         album,
@@ -363,16 +374,95 @@ fn snapshot(session: &Session, wic: Option<&IWICImagingFactory>, cache: &mut Art
         taken: Instant::now(),
         art_id: cache.id,
         art: cache.art.clone(),
+        app_icon: cache.app_icon.clone(),
         art_is_icon: cache.is_icon,
     })
 }
 
 /// The icon of the app with this AppUserModelID, as the shell shows it.
 fn app_icon(wic: &IWICImagingFactory, app_id: &str) -> Result<Art> {
-    let icon = crate::services::icons::load(wic, &format!("shell:AppsFolder\\{app_id}"), ART_PX)?;
-    let mut pixels = vec![0u8; (ART_PX * ART_PX * 4) as usize];
-    unsafe { icon.image.CopyPixels(std::ptr::null(), ART_PX * 4, &mut pixels)? };
-    Ok(Art { size: ART_PX, pixels })
+    let icon = crate::services::icons::load(wic, &format!("shell:AppsFolder\\{app_id}"), ART_PX)
+        .or_else(|original| {
+            // Unpackaged players can report a bare executable name, which is
+            // not an AppsFolder ID. Resolve an unambiguous running process.
+            let path = media_executable(app_id).ok_or(original)?;
+            crate::services::icons::load(wic, &path, ART_PX)
+        })?;
+    let (mut width, mut height) = (0, 0);
+    unsafe { icon.image.GetSize(&mut width, &mut height)? };
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    unsafe { icon.image.CopyPixels(std::ptr::null(), width * 4, &mut pixels)? };
+    Ok(Art { width, height, pixels })
+}
+
+fn media_executable(app_id: &str) -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+    let process_name = process_name(app_id)?;
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()? };
+    let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+    let mut result: Option<String> = None;
+    let mut ambiguous = false;
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry).is_ok() };
+    while more {
+        let end = entry.szExeFile.iter().position(|&ch| ch == 0).unwrap_or(entry.szExeFile.len());
+        if String::from_utf16_lossy(&entry.szExeFile[..end]).eq_ignore_ascii_case(&process_name)
+            && let Some(info) = crate::platform::wininfo::process_info(entry.th32ProcessID) {
+                if result.as_ref().is_some_and(|path| !path.eq_ignore_ascii_case(&info.exe)) { ambiguous = true; break; }
+                result = Some(info.exe);
+            }
+        more = unsafe { Process32NextW(snapshot, &mut entry).is_ok() };
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    if ambiguous { None } else { result }
+}
+
+/// Some media sessions report a process name without the .exe suffix.
+fn process_name(app_id: &str) -> Option<String> {
+    let name = app_id.trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+        return None;
+    }
+    if name.to_ascii_lowercase().ends_with(".exe") { Some(name.to_owned()) }
+    else if !name.contains('.') { Some(format!("{name}.exe")) }
+    else { None }
+}
+
+fn scaled_art_size(width: u32, height: u32) -> Option<(u32, u32)> {
+    if width == 0 || height == 0 { return None; }
+    let scale = ART_PX as f64 / width.max(height) as f64;
+    Some((((width as f64 * scale).round() as u32).max(1), ((height as f64 * scale).round() as u32).max(1)))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn process_names_are_detected_without_hardcoded_apps() {
+        assert_eq!(super::process_name("Chrome"), Some("Chrome.exe".into()));
+        assert_eq!(super::process_name("Spotify.exe"), Some("Spotify.exe".into()));
+        assert_eq!(super::process_name("com.example.App!player"), None);
+        assert_eq!(super::process_name("C:\\other.exe"), None);
+    }
+
+    #[test]
+    #[ignore = "requires a running Spotify desktop process"]
+    fn resolves_live_spotify_executable() {
+        let path = super::media_executable("Spotify.exe").expect("Spotify desktop process");
+        assert!(path.to_ascii_lowercase().ends_with("\\spotify.exe"));
+        let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
+        let wic: windows::Win32::Graphics::Imaging::IWICImagingFactory = unsafe {
+            windows::Win32::System::Com::CoCreateInstance(&windows::Win32::Graphics::Imaging::CLSID_WICImagingFactory, None, windows::Win32::System::Com::CLSCTX_INPROC_SERVER)
+        }.unwrap();
+        assert!(super::app_icon(&wic, "Spotify.exe").is_ok());
+    }
+
+    #[test]
+    fn artwork_scaling_preserves_landscape_and_portrait_proportions() {
+        assert_eq!(super::scaled_art_size(1600, 900), Some((112, 63)));
+        assert_eq!(super::scaled_art_size(900, 1600), Some((63, 112)));
+        assert_eq!(super::scaled_art_size(100, 100), Some((112, 112)));
+        assert_eq!(super::scaled_art_size(0, 100), None);
+    }
 }
 
 fn read_art(thumbnail: &IRandomAccessStreamReference, wic: &IWICImagingFactory) -> Result<Art> {
@@ -390,8 +480,11 @@ fn read_art(thumbnail: &IRandomAccessStreamReference, wic: &IWICImagingFactory) 
         let memory = SHCreateMemStream(Some(&bytes)).ok_or_else(windows::core::Error::empty)?;
         let decoder = wic.CreateDecoderFromStream(&memory, std::ptr::null(), WICDecodeMetadataCacheOnDemand)?;
         let frame = decoder.GetFrame(0)?;
+        let (mut width, mut height) = (0, 0);
+        frame.GetSize(&mut width, &mut height)?;
+        let (width, height) = scaled_art_size(width, height).ok_or_else(windows::core::Error::empty)?;
         let scaler = wic.CreateBitmapScaler()?;
-        scaler.Initialize(&frame.cast::<IWICBitmapSource>()?, ART_PX, ART_PX, WICBitmapInterpolationModeFant)?;
+        scaler.Initialize(&frame.cast::<IWICBitmapSource>()?, width, height, WICBitmapInterpolationModeFant)?;
         let converter = wic.CreateFormatConverter()?;
         converter.Initialize(
             &scaler,
@@ -401,8 +494,8 @@ fn read_art(thumbnail: &IRandomAccessStreamReference, wic: &IWICImagingFactory) 
             0.0,
             WICBitmapPaletteTypeMedianCut,
         )?;
-        let mut pixels = vec![0u8; (ART_PX * ART_PX * 4) as usize];
-        converter.CopyPixels(std::ptr::null(), ART_PX * 4, &mut pixels)?;
-        Ok(Art { size: ART_PX, pixels })
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        converter.CopyPixels(std::ptr::null(), width * 4, &mut pixels)?;
+        Ok(Art { width, height, pixels })
     }
 }

@@ -1,17 +1,12 @@
-//! Sharp icons for paths and `shell:AppsFolder` items, via the shell's image
-//! factory (the same source explorer uses), converted to premultiplied BGRA
-//! so Direct2D can draw them.
-//!
-//! The shell returns its nearest frame at or above the requested size (often
-//! 48 or 256 px). Scaling that down at draw time softens edges, so icons are
-//! resampled here, once, to exactly the pixels they will cover, and then
-//! drawn 1:1.
+//! Original shell-provided icons for paths and `shell:AppsFolder` items.
+//! Keep the bitmap at the size returned by Windows and convert its pixel
+//! format for Direct2D; views can reuse it at their requested display sizes.
 
 use windows::Win32::Foundation::SIZE;
 use windows::Win32::Graphics::Gdi::{DeleteObject, HPALETTE};
 use windows::Win32::Graphics::Imaging::{
     GUID_WICPixelFormat32bppPBGRA, IWICBitmapSource, IWICImagingFactory, WICBitmapCacheOnLoad,
-    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
+    WICBitmapDitherTypeNone, WICBitmapPaletteTypeMedianCut,
     WICBitmapUsePremultipliedAlpha,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
@@ -25,7 +20,6 @@ pub struct ShellIcon {
     pub name: String,
     pub image: IWICBitmapSource,
 }
-
 pub fn load(wic: &IWICImagingFactory, target: &str, size_px: u32) -> Result<ShellIcon> {
     let item: IShellItem = unsafe { SHCreateItemFromParsingName(&HSTRING::from(target), None)? };
     load_item(wic, &item, size_px)
@@ -44,10 +38,9 @@ pub fn load_item(wic: &IWICImagingFactory, item: &IShellItem, size_px: u32) -> R
         let _ = DeleteObject(hbitmap.into());
         let bitmap = bitmap?;
 
-        let image = resize(wic, &bitmap.cast()?, size_px)?;
         let converter = wic.CreateFormatConverter()?;
         converter.Initialize(
-            &image,
+            &bitmap,
             &GUID_WICPixelFormat32bppPBGRA,
             WICBitmapDitherTypeNone,
             None,
@@ -60,18 +53,23 @@ pub fn load_item(wic: &IWICImagingFactory, item: &IShellItem, size_px: u32) -> R
     }
 }
 
-/// `source` resampled to `size_px` square (Fant filter: a proper area average
-/// when shrinking), or unchanged if it already has that size.
-pub fn resize(wic: &IWICImagingFactory, source: &IWICBitmapSource, size_px: u32) -> Result<IWICBitmapSource> {
-    let size_px = size_px.max(1);
-    unsafe {
-        let (mut w, mut h) = (0, 0);
-        source.GetSize(&mut w, &mut h)?;
-        if w == size_px && h == size_px {
-            return Ok(source.clone());
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore = "reads this user's taskbar icons"]
+    fn inspect_live_icon_sizes() {
+        use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
+        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap(); }
+        let wic: IWICImagingFactory = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).unwrap() };
+        for target in crate::platform::taskbar_pins::read().unwrap() {
+            for requested in [32, 64, 128, 256] {
+                if let Ok(icon) = super::load(&wic, &target, requested) {
+                    let (mut width, mut height) = (0, 0);
+                    unsafe { icon.image.GetSize(&mut width, &mut height).unwrap(); }
+                    eprintln!("{}: requested {requested}, received {width}x{height}", icon.name);
+                }
+            }
         }
-        let scaler = wic.CreateBitmapScaler()?;
-        scaler.Initialize(source, size_px, size_px, WICBitmapInterpolationModeFant)?;
-        wic.CreateBitmapFromSource(&scaler, WICBitmapCacheOnLoad)?.cast()
     }
 }

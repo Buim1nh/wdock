@@ -108,6 +108,9 @@ mod tests {
         text = set_key(&text, "appearance", "backdrop", "\"solid\"");
         text = set_key(&text, "topbar", "monitors", "\"primary\"");
         text = set_key(&text, "dock", "auto_hide", "\"on\"");
+        text = set_key(&text, "dock", "hover_effect", "\"glass\"");
+        text = set_key(&text, "dock", "icon_size", "40");
+        text = set_key(&text, "dock", "hover_size", "80");
         text = set_key(&text, "island", "enabled", "false");
         text = set_key(&text, "island", "animate_equalizer", "false");
         let config: Config = toml::from_str(&text).expect("edited template parses");
@@ -115,6 +118,9 @@ mod tests {
         assert_eq!(config.appearance.backdrop, config::Backdrop::Solid);
         assert_eq!(config.topbar.monitors, config::MonitorScope::Primary);
         assert_eq!(config.dock.auto_hide, config::AutoHide::On);
+        assert_eq!(config.dock.hover_effect, config::DockHoverEffect::Glass);
+        assert_eq!(config.dock.base_icon_size(), 40.0);
+        assert_eq!(config.dock.hover_icon_size(), 80.0);
         assert!(!config.island.enabled && !config.island.animate_equalizer);
         // Comments from the template survive the edits.
         assert!(text.contains("# \"auto\" follows Windows"));

@@ -8,13 +8,13 @@ use std::sync::Once;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
-use windows::Win32::Graphics::Gdi::{InvalidateRect, ScreenToClient, ValidateRect};
+use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, InvalidateRect, ScreenToClient, SetWindowRgn, ValidateRect};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, SW_HIDE, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, MA_ACTIVATE, SW_SHOW, SetForegroundWindow,
-    WA_INACTIVE, WM_ACTIVATE, WM_CLOSE, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN,
-    WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_MOUSEWHEEL, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, SendMessageW, SWP_NOZORDER, WM_RBUTTONUP, CreateWindowExW, DefWindowProcW, GWLP_USERDATA,
+    WA_INACTIVE, WM_ACTIVATE, WM_CLOSE, WM_DESTROY, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN,
+    WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_MOUSEWHEEL, WM_MOUSEHWHEEL, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, SendMessageW, SWP_NOZORDER, WM_RBUTTONUP, CreateWindowExW, DefWindowProcW, GWLP_USERDATA,
     GetClientRect, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
     MA_NOACTIVATE, PostMessageW, RegisterClassW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_DISPLAYCHANGE, WM_DPICHANGED,
@@ -48,7 +48,10 @@ pub struct PaintCx<'a> {
 /// Content of a bar. Event handlers return `true` when the bar must repaint.
 pub trait View {
     fn attach(&mut self, _hwnd: HWND) {}
+    fn destroy(&mut self) {}
     fn paint(&mut self, cx: &PaintCx);
+    /// Optional custom window corner radius in DIPs.
+    fn window_corner_radius(&self) -> Option<f32> { None }
     fn mouse_move(&mut self, _x: f32, _y: f32) -> bool {
         false
     }
@@ -66,6 +69,10 @@ pub trait View {
     }
     /// Mouse wheel over the bar; `delta` is positive when rolled away from the user.
     fn wheel(&mut self, _x: f32, _y: f32, _delta: i16) -> bool {
+        false
+    }
+
+    fn horizontal_wheel(&mut self, _x: f32, _y: f32, _delta: i16) -> bool {
         false
     }
     /// Key press in an activatable popup (virtual-key code).
@@ -139,6 +146,10 @@ pub fn command(hwnd: HWND, id: usize) {
     }
 }
 
+pub fn post_command(hwnd: HWND, id: usize) {
+    let _ = unsafe { PostMessageW(Some(hwnd), WM_APP_COMMAND, WPARAM(id), LPARAM(0)) };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
     Left,
@@ -204,6 +215,7 @@ pub fn create(gfx: Rc<Gfx>, theme: Rc<Theme>, spec: BarSpec, view: Box<dyn View>
     backdrop::apply(hwnd, &state.theme, spec.corners);
     state.surface = Some(Surface::new(&state.gfx, hwnd, width as u32, height as u32)?);
     state.view.attach(hwnd);
+    apply_window_region(hwnd, state, width, height);
     unsafe {
         if spec.activate {
             let _ = ShowWindow(hwnd, SW_SHOW);
@@ -212,6 +224,7 @@ pub fn create(gfx: Rc<Gfx>, theme: Rc<Theme>, spec: BarSpec, view: Box<dyn View>
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         }
     }
+    crate::platform::virtual_desktops::pin_window(hwnd);
     Ok(hwnd)
 }
 
@@ -282,6 +295,10 @@ fn mouse_pos(lparam: LPARAM) -> (f32, f32) {
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match msg {
+            crate::platform::island_drag::WM_START_FILE_DRAG => {
+                crate::platform::island_drag::start_pending_drag(hwnd);
+                return LRESULT(0);
+            }
             WM_NCCREATE => {
                 let create = &*(lparam.0 as *const CREATESTRUCTW);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
@@ -311,6 +328,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         };
 
         let repaint = match msg {
+            WM_DESTROY => {
+                state.view.destroy();
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
             WM_PAINT => {
                 paint(hwnd, state);
                 let _ = ValidateRect(Some(hwnd), None);
@@ -350,12 +371,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 let (x, y) = mouse_pos(lparam);
                 state.view.mouse_up(x, y, button_of(msg))
             }
-            WM_MOUSEWHEEL => {
+            WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                 // Wheel coordinates are in screen space.
                 let mut point = POINT { x: (lparam.0 & 0xFFFF) as i16 as i32, y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32 };
                 let _ = ScreenToClient(hwnd, &mut point);
                 let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
-                state.view.wheel(point.x as f32, point.y as f32, delta)
+                if msg == WM_MOUSEHWHEEL {
+                    state.view.horizontal_wheel(point.x as f32, point.y as f32, delta)
+                } else {
+                    state.view.wheel(point.x as f32, point.y as f32, delta)
+                }
             }
             WM_LBUTTONDBLCLK | WM_RBUTTONDBLCLK => {
                 let (x, y) = mouse_pos(lparam);
@@ -433,8 +458,20 @@ fn apply_frame(hwnd: HWND, state: &mut BarState) -> bool {
     unsafe {
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), frame.left, frame.top, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
     }
+    if resized { apply_window_region(hwnd, state, width, height); }
     // Only a resized swap chain is blank and needs drawing right away.
     resized
+}
+
+fn apply_window_region(hwnd: HWND, state: &BarState, width: i32, height: i32) {
+    let Some(radius) = state.view.window_corner_radius() else { return; };
+    let diameter = (2.0 * radius * state.scale).round().max(1.0) as i32;
+    unsafe {
+        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
+        if !region.is_invalid() && SetWindowRgn(hwnd, Some(region), true) == 0 {
+            let _ = DeleteObject(region.into());
+        }
+    }
 }
 
 fn paint(hwnd: HWND, state: &mut BarState) {

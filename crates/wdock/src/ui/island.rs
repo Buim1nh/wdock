@@ -15,7 +15,7 @@ use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
@@ -29,14 +29,18 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
-    KillTimer, MB_ICONASTERISK, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow,
+    GetCursorPos, HWND_TOPMOST, KillTimer, MB_ICONASTERISK, SW_HIDE, SW_SHOWNOACTIVATE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetTimer, SetWindowPos, ShowWindow,
 };
 use windows_numerics::Matrix3x2;
 
 use crate::app;
-use crate::model::config::IslandConfig;
+use crate::model::config::{IslandConfig, IslandStyle};
 use crate::model::pomodoro::{self, Phase, Pomodoro};
+use crate::model::island_files;
+use crate::platform::island_drag;
 use crate::platform::monitors::Monitor;
 use crate::services::media::{self, Command, Media};
 use crate::services::privacy::{self, Sensors};
@@ -58,25 +62,30 @@ const TIMER_ANIMATE: usize = 1;
 const TIMER_NOTICE: usize = 2;
 const TIMER_TICK: usize = 3;
 const TIMER_EQ: usize = 4;
+const TIMER_LEAVE: usize = 5;
+const TIMER_LYRICS_MOTION: usize = 6;
+const TIMER_PIN_TOP: usize = 7;
 /// Posted to a view with `bar::command` when a Pomodoro phase ended.
 const CMD_WORK_DONE: usize = 1;
 const CMD_BREAK_DONE: usize = 2;
+const CMD_REFRESH_APPEARANCE: usize = 3;
+const CMD_LYRICS_CHANGED: usize = 4;
 
 const FRAME_MS: u32 = 15;
 const EQ_MS: u32 = 150;
 const NOTICE_MS: u32 = 2000;
+const LEAVE_DELAY_MS: u32 = 200;
+const HOVER_MARGIN: f32 = 8.0;
 /// Fraction of the remaining distance covered per animation frame.
 const EASE: f32 = 0.28;
 
-/// Gap between the monitor's top edge and the pill, DIPs.
-const TOP_GAP: f32 = 2.0;
 const IDLE: (f32, f32) = (92.0, 26.0);
-const WIDTH_MEDIA: f32 = 56.0;
+const WIDTH_MEDIA: f32 = 24.0;
 const WIDTH_TIMER: f32 = 64.0;
 /// Extra pill width per active privacy dot (microphone, camera).
 const WIDTH_DOT: f32 = 14.0;
 const NOTICE: (f32, f32) = (280.0, 46.0);
-const EXPANDED: (f32, f32) = (400.0, 158.0);
+const EXPANDED: (f32, f32) = (680.0, 240.0);
 const EXPANDED_RADIUS: f32 = 24.0;
 
 const WORK_COLOR: D2D1_COLOR_F = rgba(255, 159, 10, 1.0);
@@ -149,6 +158,19 @@ fn notify_views() {
     for hwnd in views {
         bar::notify_model_changed(hwnd);
     }
+}
+
+/// Refreshes appearance and tab order without disturbing AppBars.
+pub fn refresh_appearance() {
+    let views = shared(|s| s.views.clone()).unwrap_or_default();
+    for hwnd in views {
+        bar::command(hwnd, CMD_REFRESH_APPEARANCE);
+    }
+}
+
+pub fn lyrics_changed() {
+    let views = shared(|s| s.views.clone()).unwrap_or_default();
+    for hwnd in views { bar::post_command(hwnd, CMD_LYRICS_CHANGED); }
 }
 
 /// Re-arms the main window's one-shot timer for the end of the running phase.
@@ -231,12 +253,25 @@ fn compact_size(content: Content) -> (f32, f32) {
 
 /// The window rectangle for a pill of `size` pixels, hanging from the top of
 /// `monitor` and centred on it.
-fn frame_rect(monitor: RECT, size: (f32, f32), scale: f32) -> RECT {
+fn frame_rect(monitor: RECT, size: (f32, f32), scale: f32, bar_height: f32) -> RECT {
     let centre = (monitor.left + monitor.right) as f32 / 2.0;
     let (w, h) = (size.0.round() as i32, size.1.round() as i32);
     let left = (centre - w as f32 / 2.0).round() as i32;
-    let top = monitor.top + (TOP_GAP * scale).round() as i32;
+    // Centre the compact pill in the bar; expanded panels keep the same top.
+    let bar_px = (bar_height * scale).round();
+    let content_px = crate::ui::topbar::content_height(bar_px, scale);
+    let compact_px = (IDLE.1.min(bar_height.max(0.0)) * scale).round().min(content_px);
+    // If the remaining space is odd, put the extra pixel below the pill.
+    let top = monitor.top + ((content_px - compact_px).max(0.0) / 2.0).floor() as i32;
     RECT { left, top, right: left + w, bottom: top + h }
+}
+
+/// Keep the panel open while crossing its growing footprint and nearby edges.
+fn in_hover_area(monitor: RECT, scale: f32, bar_height: f32, point: POINT) -> bool {
+    let bounds = frame_rect(monitor, (EXPANDED.0 * scale, EXPANDED.1 * scale), scale, bar_height);
+    let margin = (HOVER_MARGIN * scale).ceil() as i32;
+    point.x >= bounds.left - margin && point.x < bounds.right + margin
+        && point.y >= bounds.top - margin && point.y < bounds.bottom + margin
 }
 
 /// Moves `current` towards `target`, snapping when close. Returns whether it arrived.
@@ -250,6 +285,7 @@ fn approach(current: &mut f32, target: f32) -> bool {
 
 /// How far a pill of width `w` has grown from the idle capsule to the
 /// expanded panel, 0.0 ..= 1.0.
+#[cfg(test)]
 fn expansion(w: f32, scale: f32) -> f32 {
     expansion_from(w, IDLE.0, scale)
 }
@@ -257,8 +293,11 @@ fn expansion(w: f32, scale: f32) -> f32 {
 /// How far a pill `w` pixels wide is from its compact width `compact` (DIPs)
 /// to fully expanded: 0 at rest, 1 open.
 fn expansion_from(w: f32, compact: f32, scale: f32) -> f32 {
-    let span = (EXPANDED.0 - compact).max(1.0) * scale;
-    ((w - compact * scale) / span).clamp(0.0, 1.0)
+    // `w` is the integer client width; use the same pixel rounding as the
+    // window frame so fractional-DPI compact widths really reach zero.
+    let compact_px = (compact * scale).round();
+    let span = ((EXPANDED.0 * scale).round() - compact_px).max(1.0);
+    ((w - compact_px) / span).clamp(0.0, 1.0)
 }
 
 fn ramp(value: f32, from: f32, to: f32) -> f32 {
@@ -287,30 +326,47 @@ struct PanelLayout {
 
 impl PanelLayout {
     fn new(s: f32) -> Self {
-        let r = |l: f32, t: f32, rr: f32, b: f32| rect(l * s, t * s, rr * s, b * s);
-        let (w, _) = EXPANDED;
+        let r = |l: f32, t: f32, rr: f32, b: f32| rect(l * s, (t + 36.0) * s, rr * s, (b + 36.0) * s);
         Self {
-            art: r(16.0, 16.0, 80.0, 80.0),
-            title: r(92.0, 18.0, w - 16.0, 42.0),
-            artist: r(92.0, 42.0, w - 16.0, 62.0),
-            bar: r(16.0, 92.0, w - 16.0, 96.0),
-            elapsed: r(16.0, 98.0, 100.0, 114.0),
-            length: r(w - 100.0, 98.0, w - 16.0, 114.0),
-            prev: r(40.0, 118.0, 76.0, 146.0),
-            play: r(84.0, 118.0, 124.0, 146.0),
-            next: r(132.0, 118.0, 168.0, 146.0),
-            phase: r(176.0, 118.0, 228.0, 146.0),
-            dec: r(228.0, 118.0, 252.0, 146.0),
-            time: r(252.0, 118.0, 308.0, 146.0),
-            inc: r(308.0, 118.0, 332.0, 146.0),
-            toggle: r(338.0, 118.0, 364.0, 146.0),
-            reset: r(366.0, 118.0, 392.0, 146.0),
+            art: r(16.0, 20.0, 106.0, 110.0),
+            title: r(118.0, 22.0, 380.0, 46.0),
+            artist: r(118.0, 46.0, 380.0, 66.0),
+            bar: r(156.0, 76.0, 380.0, 80.0),
+            elapsed: r(156.0, 82.0, 220.0, 98.0),
+            length: r(310.0, 82.0, 380.0, 98.0),
+            prev: r(132.0, 116.0, 170.0, 150.0),
+            play: r(181.0, 116.0, 219.0, 150.0),
+            next: r(230.0, 116.0, 268.0, 150.0),
+            phase: r(28.0, 158.0, 106.0, 192.0),
+            dec: r(133.0, 158.0, 165.0, 192.0),
+            time: r(166.0, 158.0, 224.0, 192.0),
+            inc: r(225.0, 158.0, 257.0, 192.0),
+            toggle: r(298.0, 158.0, 332.0, 192.0),
+            reset: r(338.0, 158.0, 372.0, 192.0),
         }
     }
 }
 
 fn contains(r: D2D_RECT_F, x: f32, y: f32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
+}
+
+/// Trackpads can deliver fractional wheel steps across several messages.
+fn wheel_step(remainder: &mut i32, delta: i16) -> i32 {
+    *remainder += i32::from(delta);
+    let steps = *remainder / 120;
+    *remainder %= 120;
+    steps
+}
+
+fn tab_rect(index: usize, scale: f32) -> D2D_RECT_F {
+    let left = (16.0 + index as f32 * 92.0) * scale;
+    rect(left, 9.0 * scale, left + 86.0 * scale, 33.0 * scale)
+}
+
+fn file_rect(index: usize, scale: f32) -> D2D_RECT_F {
+    let top = (43.0 + index as f32 * 35.0) * scale;
+    rect(16.0 * scale, top, (EXPANDED.0 - 16.0) * scale, top + 32.0 * scale)
 }
 
 /// A short announcement.
@@ -320,6 +376,14 @@ struct Notice {
     text: String,
     /// Level shown as a bar, 0.0 ..= 1.0.
     level: Option<f32>,
+    visual: NoticeVisual,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum NoticeVisual {
+    Standard,
+    Power(crate::services::Battery),
+    Network { connected: bool, detail: String },
 }
 
 const BATTERY_LOW: u8 = 20;
@@ -328,43 +392,37 @@ const BATTERY_LOW: u8 = 20;
 fn notice_for(prev: &SystemStatus, next: &SystemStatus) -> Option<Notice> {
     use crate::ui::glyphs;
     if prev.audio_device != next.audio_device {
-        return Some(Notice { glyph: GLYPH_HEADPHONES, text: "Audio output changed".into(), level: None });
-    }
-    if let (Some(a), Some(b)) = (prev.volume, next.volume)
-        && ((a.level - b.level).abs() > 0.004 || a.muted != b.muted)
-    {
-        let text = if b.muted { "Muted".to_owned() } else { format!("Volume {}%", (b.level * 100.0).round() as u32) };
-        return Some(Notice {
-            glyph: glyphs::volume(b.level, b.muted),
-            text,
-            level: Some(if b.muted { 0.0 } else { b.level }),
-        });
+        return Some(Notice { glyph: GLYPH_HEADPHONES, text: "Audio output changed".into(), level: None, visual: NoticeVisual::Standard });
     }
     if let (Some(a), Some(b)) = (prev.brightness, next.brightness)
         && a != b
     {
-        return Some(Notice { glyph: glyphs::BRIGHTNESS, text: format!("Brightness {b}%"), level: Some(f32::from(b) / 100.0) });
+        return Some(Notice { glyph: glyphs::BRIGHTNESS, text: format!("Brightness {b}%"), level: Some(f32::from(b) / 100.0), visual: NoticeVisual::Standard });
     }
     if let (Some(a), Some(b)) = (prev.battery, next.battery) {
         if a.plugged != b.plugged {
             let text = if b.plugged { format!("Charging {}%", b.percent) } else { format!("On battery {}%", b.percent) };
-            return Some(Notice { glyph: glyphs::CHARGING, text, level: Some(f32::from(b.percent) / 100.0) });
+            return Some(Notice { glyph: glyphs::CHARGING, text, level: Some(f32::from(b.percent) / 100.0), visual: NoticeVisual::Power(b) });
         }
         if !b.plugged && a.percent > BATTERY_LOW && b.percent <= BATTERY_LOW {
             return Some(Notice {
                 glyph: glyphs::CHARGING,
                 text: format!("Battery low {}%", b.percent),
                 level: Some(f32::from(b.percent) / 100.0),
+                visual: NoticeVisual::Power(b),
             });
+        }
+        if b.plugged && a.percent < 100 && b.percent == 100 {
+            return Some(Notice { glyph: glyphs::CHARGING, text: "Battery full".into(), level: Some(1.0), visual: NoticeVisual::Power(b) });
         }
     }
     if network_kind(&prev.network) != network_kind(&next.network) {
-        let (glyph, text) = match &next.network {
-            NetState::Wifi { ssid, .. } => (glyphs::WIFI, format!("Wi-Fi {ssid}")),
-            NetState::Wired => (glyphs::ETHERNET, "Ethernet connected".to_owned()),
-            NetState::Offline => (glyphs::WIFI, "Offline".to_owned()),
+        let (glyph, text, connected, detail) = match &next.network {
+            NetState::Wifi { ssid, .. } => (glyphs::WIFI, format!("Wi-Fi {ssid}"), true, ssid.clone()),
+            NetState::Wired => (glyphs::ETHERNET, "Ethernet connected".to_owned(), true, "Ethernet".to_owned()),
+            NetState::Offline => (glyphs::WIFI, "Offline".to_owned(), false, "No connection".to_owned()),
         };
-        return Some(Notice { glyph, text, level: None });
+        return Some(Notice { glyph, text, level: None, visual: NoticeVisual::Network { connected, detail } });
     }
     None
 }
@@ -372,8 +430,8 @@ fn notice_for(prev: &SystemStatus, next: &SystemStatus) -> Option<Notice> {
 /// Announces a sensor that just came into use.
 fn privacy_notice(prev: Sensors, next: Sensors) -> Option<Notice> {
     match (next.mic && !prev.mic, next.camera && !prev.camera) {
-        (_, true) => Some(Notice { glyph: GLYPH_CAMERA, text: "Camera in use".into(), level: None }),
-        (true, false) => Some(Notice { glyph: GLYPH_MIC, text: "Microphone in use".into(), level: None }),
+        (_, true) => Some(Notice { glyph: GLYPH_CAMERA, text: "Camera in use".into(), level: None, visual: NoticeVisual::Standard }),
+        (true, false) => Some(Notice { glyph: GLYPH_MIC, text: "Microphone in use".into(), level: None, visual: NoticeVisual::Standard }),
         _ => None,
     }
 }
@@ -405,14 +463,19 @@ struct Formats {
     icon_small: IDWriteTextFormat,
     title: IDWriteTextFormat,
     artist: IDWriteTextFormat,
+    tab: IDWriteTextFormat,
     small: IDWriteTextFormat,
+    small_center: IDWriteTextFormat,
     small_right: IDWriteTextFormat,
     time: IDWriteTextFormat,
     compact: IDWriteTextFormat,
+    lyric: IDWriteTextFormat,
+    lyric_active: IDWriteTextFormat,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Hot {
+    PinLyrics,
     Prev,
     Play,
     Next,
@@ -422,16 +485,90 @@ enum Hot {
     Label,
     Dec,
     Inc,
+    Tab(usize),
+    File(usize),
+    RemoveFile(usize),
+}
+
+#[derive(Default)]
+struct LyricMotion {
+    track: String,
+    line: String,
+    first: String,
+    next: String,
+    progress: Option<f32>,
+    offset: f32,
+    velocity: f32,
+    frame: Option<Instant>,
+}
+
+impl LyricMotion {
+    fn update(&mut self, track: &str, live: &crate::services::lyrics::LiveLyrics, playing: bool) -> Option<f32> {
+        let now = Instant::now();
+        let dt = self.frame.replace(now).map_or(0.0, |previous| now.duration_since(previous).as_secs_f32().min(0.1));
+        let start = live.active.saturating_sub(2);
+        let first = live.lines.get(start).map_or("", String::as_str);
+        let next = live.lines.get(start + 1).map_or("", String::as_str);
+        let line = live.lines.get(live.active).map_or("", String::as_str);
+        if self.track != track {
+            self.offset = 0.0;
+            self.velocity = 0.0;
+            self.progress = live.progress;
+        } else {
+            if first != self.first && first == self.next && !first.is_empty() {
+                self.offset = 29.0;
+                self.velocity = 0.0;
+            }
+            if self.line != line { self.progress = live.progress; }
+            else if let (Some(current), Some(target)) = (self.progress, live.progress) {
+                // Ease between bridge samples; seek backwards and large jumps immediately.
+                self.progress = Some(if !playing || target < current - 0.5 || (target - current).abs() > 8.0 {
+                    target
+                } else { current + (target - current) * (1.0 - (-dt * 18.0).exp()) });
+            } else { self.progress = live.progress; }
+        }
+        // Critically damped spring: smooth arrival without oscillation.
+        let omega = 18.0;
+        let decay = (-omega * dt).exp();
+        let velocity = self.velocity + omega * self.offset;
+        self.offset = (self.offset + velocity * dt) * decay;
+        self.velocity = (self.velocity - omega * velocity * dt) * decay;
+        self.track = track.to_owned(); self.line = line.to_owned();
+        self.first = first.to_owned(); self.next = next.to_owned();
+        self.progress
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab { Media, Files, Lyrics }
+
+fn configured_tabs(config: &IslandConfig) -> Vec<Tab> {
+    let enabled = |tab| match tab { Tab::Media | Tab::Lyrics => true, Tab::Files => config.file_shelf };
+    let mut tabs = Vec::new();
+    for name in &config.widget_order {
+        let tab = match name.as_str() { "media" => Tab::Media, "files" => Tab::Files, _ => continue };
+        if enabled(tab) && !tabs.contains(&tab) { tabs.push(tab); }
+    }
+    for tab in [Tab::Media, Tab::Files, Tab::Lyrics] {
+        if enabled(tab) && !tabs.contains(&tab) { tabs.push(tab); }
+    }
+    tabs
 }
 
 pub struct Island {
     hwnd: HWND,
     monitor: RECT,
     scale: f32,
+    bar_height: f32,
+    style: IslandStyle,
+    notch_width: f32,
     /// Current window size in pixels.
     size: (f32, f32),
     animating: bool,
     hovered: bool,
+    lyrics_pinned: bool,
+    dismissed: bool,
+    horizontal_wheel_remainder: i32,
     suspended: bool,
     notices: bool,
     animate_eq: bool,
@@ -441,11 +578,22 @@ pub struct Island {
     privacy: Sensors,
     notice: Option<Notice>,
     art: Option<(u64, ID2D1Bitmap1)>,
+    app_icon: Option<(u64, ID2D1Bitmap1)>,
+    lyrics_background: Option<(u64, ID2D1Bitmap1)>,
+    lyrics_background_previous: Option<ID2D1Bitmap1>,
+    lyrics_background_changed: Option<Instant>,
+    lyrics_background_track: String,
+    lyrics_background_motion: bool,
+    lyrics_warp_source: Vec<u8>,
+    lyrics_warp_time: f32,
+    lyrics_warp_frame: Option<Instant>,
     /// Live preview of the playing window, shown in the cover's place while
     /// expanded when the source set no cover; keyed by the track title.
     thumb: Option<(String, Option<Thumbnail>)>,
     eq_step: u32,
     eq_running: bool,
+    lyrics_motion_running: bool,
+    lyric_motion: LyricMotion,
     /// The composition-animated equalizer; `Err` once it failed to build, so
     /// the island falls back to repainting on a timer.
     eq_layer: Option<std::result::Result<EqLayer, ()>>,
@@ -454,16 +602,30 @@ pub struct Island {
     formats: Option<Formats>,
     panel: PanelLayout,
     hot: Option<Hot>,
+    tab: Tab,
+    tabs: Vec<Tab>,
+    file_shelf: bool,
+    file_scroll: usize,
+    lyrics_scroll: usize,
+    file_pressed: Option<(usize, f32, f32)>,
+    drop_registered: bool,
+    drag_over: bool,
 }
 
-pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &IslandConfig, monitor: &Monitor) -> Result<HWND> {
+pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &IslandConfig, monitor: &Monitor, bar_height: f32) -> Result<HWND> {
     let mut island = Island {
         hwnd: HWND::default(),
         monitor: monitor.rect,
         scale: monitor.scale,
+        bar_height,
+        style: config.style,
+        notch_width: config.notch_width(),
         size: (0.0, 0.0),
         animating: false,
         hovered: false,
+        lyrics_pinned: false,
+        dismissed: false,
+        horizontal_wheel_remainder: 0,
         suspended: false,
         notices: config.notices,
         animate_eq: config.animate_equalizer,
@@ -473,26 +635,201 @@ pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &IslandConfig, monitor: 
         privacy: privacy::current(),
         notice: None,
         art: None,
+        app_icon: None,
+        lyrics_background: None,
+        lyrics_background_previous: None,
+        lyrics_background_changed: None,
+        lyrics_background_track: String::new(),
+        lyrics_background_motion: config.lyrics_background_motion,
+        lyrics_warp_source: Vec::new(),
+        lyrics_warp_time: 0.0,
+        lyrics_warp_frame: None,
         thumb: None,
         eq_step: 0,
         eq_running: false,
+        lyrics_motion_running: false,
+        lyric_motion: LyricMotion::default(),
         eq_layer: None,
         eq_at: None,
         formats: None,
         panel: PanelLayout::new(monitor.scale),
         hot: None,
+        tab: configured_tabs(config)[0],
+        tabs: configured_tabs(config),
+        file_shelf: config.file_shelf,
+        file_scroll: 0,
+        lyrics_scroll: 0,
+        file_pressed: None,
+        drop_registered: false,
+        drag_over: false,
     };
     let size = {
         let (w, h) = island.compact();
         (w * monitor.scale, h * monitor.scale)
     };
     island.size = size;
-    let rect = frame_rect(monitor.rect, size, monitor.scale);
+    let mut rect = frame_rect(monitor.rect, size, monitor.scale, bar_height);
+    if island.style == IslandStyle::Notch { rect.bottom -= rect.top - monitor.rect.top; rect.top = monitor.rect.top; }
     let spec = BarSpec { rect, scale: monitor.scale, corners: Corners::None, activate: false };
     bar::create(gfx.clone(), theme.clone(), spec, Box::new(island))
 }
 
 impl Island {
+    fn paint_week(&self, cx: &PaintCx, formats: &Formats, alpha: f32) {
+        use windows::Win32::Globalization::{GetLocaleInfoEx, LOCALE_SABBREVDAYNAME1, LOCALE_SABBREVMONTHNAME1};
+        use windows::Win32::System::SystemInformation::GetLocalTime;
+        use windows::core::PCWSTR;
+        use crate::model::calendar::{Date, month_grid};
+
+        static NAMES: OnceLock<([String; 7], [String; 12])> = OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            let get = |kind| {
+                let mut buf = [0u16; 64];
+                let len = unsafe { GetLocaleInfoEx(PCWSTR::null(), kind, Some(&mut buf)) };
+                String::from_utf16_lossy(&buf[..len.saturating_sub(1) as usize])
+            };
+            (std::array::from_fn(|i| get(LOCALE_SABBREVDAYNAME1 + i as u32)),
+             std::array::from_fn(|i| get(LOCALE_SABBREVMONTHNAME1 + i as u32)))
+        });
+        let now = unsafe { GetLocalTime() };
+        let today = Date::new(now.wYear.into(), now.wMonth.into(), now.wDay.into());
+        let days = month_grid(today.year, today.month, 1);
+        let Some(index) = days.iter().position(|(day, _)| *day == today) else { return; };
+        let s = cx.scale;
+        let header = format!("{}  {}", names.1[(today.month - 1) as usize], today.year);
+        text::draw(cx, &header, &formats.title, rect(409.0*s, 54.0*s, 664.0*s, 78.0*s), with_alpha(TEXT, alpha));
+        for i in 0..7 {
+            let (day, _) = days[(index / 7) * 7 + i];
+            let left = (409.0 + i as f32 * 36.0) * s;
+            let top = 86.0 * s;
+            let cell = rect(left, top, left + 32.0*s, 145.0*s);
+            if day == today && let Ok(brush) = cx.gfx.brush(with_alpha(rgba(10, 132, 255, 0.28), alpha)) {
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(cell, 10.0*s), &brush) };
+            }
+            text::draw(cx, &names.0[i], &formats.small_center, rect(left, top + 4.0*s, left + 32.0*s, top + 24.0*s), with_alpha(DIM, alpha));
+            text::draw(cx, &day.day.to_string(), &formats.time, rect(left, top + 25.0*s, left + 32.0*s, top + 54.0*s), with_alpha(if day == today { TEXT } else { DIM }, alpha));
+        }
+        text::draw(cx, "Calendar events not connected", &formats.artist, rect(409.0*s, 164.0*s, 664.0*s, 190.0*s), with_alpha(DIM, alpha));
+    }
+
+    fn paint_tabs(&self, cx: &PaintCx, formats: &Formats, alpha: f32) {
+        for (i, tab) in self.tabs.iter().copied().enumerate() {
+            let (label, glyph) = match tab {
+                Tab::Media => ("Media", GLYPH_MUSIC),
+                Tab::Files => ("Files", "\u{E8B7}"),
+                Tab::Lyrics => ("Lyrics", "\u{E8D2}"),
+            };
+            let r = tab_rect(i, cx.scale);
+            if (self.tab == tab || self.hot == Some(Hot::Tab(i)))
+                && let Ok(brush) = cx.gfx.brush(with_alpha(if self.tab == tab { TAB_SELECTED } else { SURFACE }, alpha)) {
+                    unsafe { cx.dc.FillRoundedRectangle(&rounded(r, 9.0 * cx.scale), &brush) };
+                }
+            let color = with_alpha(if self.tab == tab { TEXT } else { DIM }, alpha);
+            text::draw(cx, glyph, &formats.icon_small, rect(r.left + 8.0*cx.scale, r.top, r.left + 25.0*cx.scale, r.bottom), color);
+            text::draw(cx, label, &formats.tab, rect(r.left + 28.0*cx.scale, r.top, r.right - 4.0*cx.scale, r.bottom), color);
+        }
+    }
+
+    fn paint_files(&self, cx: &PaintCx, formats: &Formats, alpha: f32) {
+        let s = cx.scale;
+        let paths = island_files::list();
+        if paths.is_empty() {
+            text::draw(cx, "Drop files here to keep them close", &formats.artist,
+                rect(22.0*s, 58.0*s, 378.0*s, 105.0*s), with_alpha(DIM, alpha));
+            text::draw(cx, "Files stay in their original location", &formats.small,
+                rect(22.0*s, 103.0*s, 378.0*s, 128.0*s), with_alpha(DIM, alpha));
+            return;
+        }
+        for (row, index) in (self.file_scroll..paths.len()).take(4).enumerate() {
+            let r = file_rect(row, s);
+            if let Ok(brush) = cx.gfx.brush(with_alpha(if self.hot == Some(Hot::File(index)) { TAB_SELECTED } else { SURFACE }, alpha)) {
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(r, 9.0*s), &brush) };
+            }
+            let name = paths[index].file_name().unwrap_or(paths[index].as_os_str()).to_string_lossy();
+            text::draw(cx, &name, &formats.artist, rect(r.left + 10.0*s, r.top, r.right - 38.0*s, r.bottom), with_alpha(TEXT, alpha));
+            let close = rect(r.right - 30.0*s, r.top, r.right, r.bottom);
+            text::draw(cx, "×", &formats.time, close, with_alpha(if self.hot == Some(Hot::RemoveFile(index)) { TEXT } else { DIM }, alpha));
+        }
+        if paths.len() > 4 {
+            text::draw(cx, &format!("{} files · scroll for more", paths.len()), &formats.small,
+                rect(20.0*s, 184.0*s, 380.0*s, 198.0*s), with_alpha(DIM, alpha));
+        }
+    }
+
+    fn paint_lyrics(&mut self, cx: &PaintCx, formats: &Formats, alpha: f32) {
+        let s = cx.scale;
+        let background = rect(16.0*s, 40.0*s, 664.0*s, 228.0*s);
+        if let Some(bitmap) = self.lyrics_background_bitmap(cx) {
+            let props = D2D1_BRUSH_PROPERTIES {
+                opacity: alpha,
+                transform: Matrix3x2 { M11: (background.right-background.left)/LYRICS_BG_WIDTH as f32, M12: 0.0,
+                    M21: 0.0, M22: (background.bottom-background.top)/LYRICS_BG_HEIGHT as f32,
+                    M31: background.left, M32: background.top },
+            };
+            let blend = self.lyrics_background_changed.map_or(1.0, |at| (at.elapsed().as_secs_f32() / 0.25).clamp(0.0, 1.0));
+            if blend < 1.0 && let Some(previous) = &self.lyrics_background_previous
+                && let Ok(brush) = unsafe { cx.dc.CreateBitmapBrush(previous, None, Some(&props)) } {
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(background, 16.0*s), &brush) };
+            }
+            let mut current_props = props;
+            if self.lyrics_background_previous.is_some() { current_props.opacity *= blend; }
+            if let Ok(brush) = unsafe { cx.dc.CreateBitmapBrush(&bitmap, None, Some(&current_props)) } {
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(background, 16.0*s), &brush) };
+            }
+        }
+        let area = |top: f32, bottom: f32| rect(34.0*s, top*s, 645.0*s, bottom*s);
+        if let Some((title, artist)) = self.media.as_ref().map(|m| (m.title.clone(), m.artist.clone())) {
+            self.paint_art(cx, formats, rect(34.0*s, 50.0*s, 72.0*s, 88.0*s), 8.0*s, alpha);
+            text::draw(cx, &title, &formats.title, rect(84.0*s, 49.0*s, 598.0*s, 70.0*s), with_alpha(TEXT, alpha));
+            text::draw(cx, &artist, &formats.lyric, rect(84.0*s, 70.0*s, 598.0*s, 90.0*s), with_alpha(DIM, alpha));
+        }
+        let pin = rect(612.0*s, 52.0*s, 646.0*s, 86.0*s);
+        if let Ok(brush) = cx.gfx.brush(with_alpha(if self.lyrics_pinned || self.hot == Some(Hot::PinLyrics) { TAB_SELECTED } else { SURFACE }, alpha)) {
+            unsafe { cx.dc.FillRoundedRectangle(&rounded(pin, 17.0*s), &brush) };
+        }
+        text::draw(cx, "\u{E718}", &formats.icon_small, pin, with_alpha(if self.lyrics_pinned { TEXT } else { DIM }, alpha));
+        let Some(media) = &self.media else {
+            text::draw(cx, "Play a song to see lyrics", &formats.artist, area(62.0, 95.0), with_alpha(DIM, alpha));
+            return;
+        };
+        if let Some(live) = crate::services::lyrics::timed(media).or_else(|| crate::services::lyrics::live(media)) {
+            let track = format!("{}\u{0}{}", media.title, media.artist);
+            let progress = self.lyric_motion.update(&track, &live, media.playing);
+            let start = live.active.saturating_sub(1);
+            let previous_height = if start < live.active {
+                text::measure(&cx.gfx.dwrite, &live.lines[start], &formats.lyric_active, 611.0*s).1 / s + 10.0
+            } else { 0.0 };
+            let mut top = 132.0 - previous_height + self.lyric_motion.offset;
+            unsafe { cx.dc.PushAxisAlignedClip(&area(96.0, 220.0), windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED); }
+            for (index, line) in live.lines.iter().enumerate().skip(start).take(5) {
+                let selected = index == live.active;
+                let height = (text::measure(&cx.gfx.dwrite, line, &formats.lyric_active, 611.0*s).1 / s).max(28.0);
+                let bounds = area(top, top + height);
+                top += height + 10.0;
+                if selected && line.chars().all(|ch| ch == '•' || ch.is_whitespace()) {
+                    let time = now_ms() as f32 / 350.0;
+                    for i in 0..3 {
+                        let strength = 0.35 + 0.65 * (0.5 + 0.5 * (time - i as f32 * 0.85).sin());
+                        let dot = D2D1_ELLIPSE { point: windows_numerics::Vector2 { X: bounds.left + (6.0 + i as f32 * 14.0) * s, Y: (bounds.top + bounds.bottom) / 2.0 }, radiusX: 3.5*s, radiusY: 3.5*s };
+                        if let Ok(brush) = cx.gfx.brush(with_alpha(TEXT, alpha * strength)) { unsafe { cx.dc.FillEllipse(&dot, &brush) }; }
+                    }
+                    continue;
+                }
+                if selected && let Some(progress) = progress {
+                    text::draw_karaoke(cx, line, &formats.lyric_active, bounds, progress, alpha);
+                } else {
+                    let distance = index.abs_diff(live.active);
+                    let opacity = if selected { 1.0 } else if distance == 1 { 0.48 } else { 0.25 };
+                    text::draw(cx, line, &formats.lyric_active, bounds,
+                        with_alpha(TEXT, alpha * opacity));
+                }
+            }
+            unsafe { cx.dc.PopAxisAlignedClip(); }
+            return;
+        }
+        text::draw(cx, "Waiting for Spicy Lyrics", &formats.artist, area(105.0, 135.0), with_alpha(DIM, alpha));
+    }
+
     fn content(&self) -> Content {
         let timer = self.pomodoro.is_active();
         if self.media.is_some() {
@@ -507,15 +844,19 @@ impl Island {
     /// The compact size in DIPs: the content plus a dot per sensor in use.
     fn compact(&self) -> (f32, f32) {
         let (w, h) = compact_size(self.content());
-        (w + dots_width(self.privacy), h)
+        let bar_px = (self.bar_height * self.scale).round();
+        let content = crate::ui::topbar::content_height(bar_px, self.scale) / self.scale.max(0.01);
+        let width = w + dots_width(self.privacy);
+        (if self.style == IslandStyle::Notch { width.max(self.notch_width) } else { width }, h.min(content.max(1.0)))
     }
 
     /// The size the pill is heading for, in pixels.
     fn target(&self) -> (f32, f32) {
         let (w, h) = if self.hovered {
             EXPANDED
-        } else if self.notice.is_some() {
-            NOTICE
+        } else if let Some(notice) = &self.notice {
+            let width = if matches!(notice.visual, NoticeVisual::Power(_)) { 220.0 } else { NOTICE.0 };
+            (width.max(self.compact().0), NOTICE.1)
         } else {
             self.compact()
         };
@@ -526,6 +867,12 @@ impl Island {
         if !self.animating && !self.suspended && self.size != self.target() {
             self.animating = true;
             unsafe { SetTimer(Some(self.hwnd), TIMER_ANIMATE, FRAME_MS, None) };
+        }
+    }
+
+    fn raise(&self) {
+        if !self.suspended {
+            unsafe { let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
         }
     }
 
@@ -544,7 +891,7 @@ impl Island {
     }
 
     fn expanded(&self) -> bool {
-        self.hovered && expansion(self.size.0, self.scale) > 0.9
+        self.hovered && expansion_from(self.size.0, self.compact().0, self.scale) > 0.9
     }
 
     /// Whether the equalizer should be moving.
@@ -566,7 +913,7 @@ impl Island {
             None
         } else if self.hovered {
             let media = self.media.as_ref().is_some_and(|m| m.playing && m.has_timeline());
-            (media || self.pomodoro.is_running()).then_some(1000)
+            (media || self.pomodoro.is_running() || self.tab == Tab::Lyrics).then_some(1000)
         } else {
             // Compact: the countdown shows minutes only, so wake at the boundary.
             self.pomodoro.is_running().then(|| pomodoro::tick_delay(self.pomodoro.remaining_ms(now)))
@@ -592,6 +939,14 @@ impl Island {
                 }
             }
         }
+        let motion = !self.suspended && self.hovered && self.tab == Tab::Lyrics && self.media.as_ref().is_some_and(|m| m.playing);
+        if motion != self.lyrics_motion_running {
+            self.lyrics_motion_running = motion;
+            unsafe {
+                if motion { SetTimer(Some(self.hwnd), TIMER_LYRICS_MOTION, 16, None); }
+                else { let _ = KillTimer(Some(self.hwnd), TIMER_LYRICS_MOTION); }
+            }
+        }
     }
 
     fn show_notice(&mut self, notice: Notice) {
@@ -605,6 +960,21 @@ impl Island {
     fn hot_at(&self, x: f32, y: f32) -> Option<Hot> {
         if !self.expanded() {
             return None;
+        }
+        for i in 0..self.tabs.len() {
+            if contains(tab_rect(i, self.scale), x, y) { return Some(Hot::Tab(i)); }
+        }
+        if self.tab == Tab::Files {
+            let files = island_files::list();
+            for (row, index) in (self.file_scroll..files.len()).take(4).enumerate() {
+                let r = file_rect(row, self.scale);
+                if contains(rect(r.right - 30.0 * self.scale, r.top, r.right, r.bottom), x, y) { return Some(Hot::RemoveFile(index)); }
+                if contains(r, x, y) { return Some(Hot::File(index)); }
+            }
+            return None;
+        }
+        if self.tab == Tab::Lyrics {
+            return contains(rect(612.0*self.scale, 52.0*self.scale, 646.0*self.scale, 86.0*self.scale), x, y).then_some(Hot::PinLyrics);
         }
         let p = &self.panel;
         let media = self.media.as_ref();
@@ -632,25 +1002,39 @@ impl Island {
 impl View for Island {
     fn attach(&mut self, hwnd: HWND) {
         self.hwnd = hwnd;
+        if self.file_shelf {
+            island_files::init();
+            self.drop_registered = island_drag::register(hwnd);
+        }
         shared(|s| s.views.push(hwnd));
         self.schedule();
     }
 
+    fn destroy(&mut self) {
+        if self.drop_registered { island_drag::unregister(self.hwnd); self.drop_registered = false; }
+    }
+
     fn frame(&self) -> Option<RECT> {
-        Some(frame_rect(self.monitor, self.size, self.scale))
+        let mut frame = frame_rect(self.monitor, self.size, self.scale, self.bar_height);
+        if self.style == IslandStyle::Notch { frame.bottom -= frame.top - self.monitor.top; frame.top = self.monitor.top; }
+        Some(frame)
     }
 
     fn suspend(&mut self, suspended: bool) -> bool {
         self.suspended = suspended;
         unsafe {
             if suspended {
-                for timer in [TIMER_ANIMATE, TIMER_NOTICE, TIMER_TICK, TIMER_EQ] {
+                for timer in [TIMER_ANIMATE, TIMER_NOTICE, TIMER_TICK, TIMER_EQ, TIMER_LEAVE, TIMER_LYRICS_MOTION, TIMER_PIN_TOP] {
                     let _ = KillTimer(Some(self.hwnd), timer);
                 }
                 self.animating = false;
                 self.eq_running = false;
+                self.lyrics_motion_running = false;
                 self.notice = None;
                 self.hovered = false;
+                self.lyrics_pinned = false;
+                self.dismissed = false;
+                self.drag_over = false;
                 self.thumb = None;
                 let _ = ShowWindow(self.hwnd, SW_HIDE);
             } else {
@@ -674,7 +1058,10 @@ impl View for Island {
         if self.suspended {
             return false;
         }
-        self.media = media::current();
+        let previous_track = self.media.as_ref().map(|m| (&m.title, &m.artist, &m.album));
+        let latest = media::current();
+        if previous_track != latest.as_ref().map(|m| (&m.title, &m.artist, &m.album)) { self.lyrics_scroll = 0; }
+        self.media = latest;
         self.pomodoro = pomodoro_state();
         let status = services::status();
         let sensors = privacy::current();
@@ -694,18 +1081,67 @@ impl View for Island {
     }
 
     fn command(&mut self, id: usize) -> bool {
+        match id {
+            CMD_LYRICS_CHANGED => return !self.suspended && self.hovered && self.tab == Tab::Lyrics,
+            CMD_REFRESH_APPEARANCE => {
+                let config = crate::model::config::load().island;
+                let tabs = configured_tabs(&config);
+                if self.tabs != tabs { self.tab = tabs[0]; }
+                self.tabs = tabs;
+                self.style = config.style;
+                self.notch_width = config.notch_width();
+                self.hot = None;
+                self.animate();
+                return true;
+            }
+            island_drag::DRAG_ENTER => {
+                self.drag_over = true;
+                self.hovered = true;
+                self.tab = Tab::Files;
+                self.animate();
+                self.schedule();
+                return true;
+            }
+            island_drag::DRAG_LEAVE => {
+                self.drag_over = false;
+                unsafe { SetTimer(Some(self.hwnd), TIMER_LEAVE, LEAVE_DELAY_MS, None); }
+                return true;
+            }
+            island_drag::DRAG_DROP => {
+                self.drag_over = false;
+                island_files::accept_pending();
+                self.tab = Tab::Files;
+                self.file_scroll = 0;
+                self.hovered = true;
+                self.animate();
+                notify_views();
+                return true;
+            }
+            CMD_WORK_DONE | CMD_BREAK_DONE => {}
+            _ => return false,
+        }
         if self.notices {
             let text = if id == CMD_WORK_DONE { "Focus done, take a break" } else { "Break over" };
-            self.show_notice(Notice { glyph: GLYPH_TIMER, text: text.into(), level: None });
+            self.show_notice(Notice { glyph: GLYPH_TIMER, text: text.into(), level: None, visual: NoticeVisual::Standard });
             self.animate();
         }
         false
     }
 
     fn mouse_move(&mut self, x: f32, y: f32) -> bool {
+        if self.dismissed { return false; }
+        unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_LEAVE); }
+        if let Some((index, ox, oy)) = self.file_pressed
+            && ((x - ox).abs() > 6.0*self.scale || (y - oy).abs() > 6.0*self.scale) {
+                self.file_pressed = None;
+                unsafe { if GetCapture() == self.hwnd { let _ = ReleaseCapture(); } }
+                if let Some(path) = island_files::list().get(index).cloned() { island_drag::drag_file(self.hwnd, path); }
+                return true;
+            }
         let hot = self.hot_at(x, y);
         let hover_changed = !std::mem::replace(&mut self.hovered, true);
         if hover_changed {
+            self.raise();
             unsafe {
                 let _ = KillTimer(Some(self.hwnd), TIMER_NOTICE);
             }
@@ -721,10 +1157,11 @@ impl View for Island {
         if cfg!(debug_assertions) && std::env::var_os("WDOCK_TEST_INPUT").is_some() {
             return false;
         }
-        self.hovered = false;
         self.hot = None;
-        self.animate();
-        self.schedule();
+        if unsafe { GetCapture() } != self.hwnd { self.file_pressed = None; }
+        // Resizing the window and moving through the space around the rounded
+        // corners can briefly produce WM_MOUSELEAVE during expansion.
+        unsafe { SetTimer(Some(self.hwnd), TIMER_LEAVE, LEAVE_DELAY_MS, None); }
         true
     }
 
@@ -733,6 +1170,30 @@ impl View for Island {
             return false;
         }
         match self.hot_at(x, y) {
+            Some(Hot::Tab(i)) => {
+                self.tab = self.tabs[i];
+                if self.tab != Tab::Lyrics { self.lyrics_pinned = false; unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_PIN_TOP); } }
+                self.hot = None;
+                self.thumb = None;
+                self.schedule();
+                return true;
+            }
+            Some(Hot::PinLyrics) => {
+                self.lyrics_pinned = !self.lyrics_pinned;
+                unsafe {
+                    if self.lyrics_pinned { SetTimer(Some(self.hwnd), TIMER_PIN_TOP, 1000, None); }
+                    else { let _ = KillTimer(Some(self.hwnd), TIMER_PIN_TOP); }
+                }
+                if self.lyrics_pinned { self.raise(); }
+                return true;
+            }
+            Some(Hot::File(i)) => { self.file_pressed = Some((i, x, y)); unsafe { SetCapture(self.hwnd); } return false; }
+            Some(Hot::RemoveFile(i)) => {
+                island_files::remove(i);
+                self.file_scroll = self.file_scroll.min(island_files::list().len().saturating_sub(4));
+                notify_views();
+                return true;
+            }
             Some(Hot::Prev) => media::send(Command::Previous),
             Some(Hot::Play) => media::send(Command::PlayPause),
             Some(Hot::Next) => media::send(Command::Next),
@@ -757,8 +1218,78 @@ impl View for Island {
         false
     }
 
+    fn mouse_up(&mut self, x: f32, y: f32, button: Button) -> bool {
+        let pressed = self.file_pressed.take();
+        if pressed.is_some() { unsafe { if GetCapture() == self.hwnd { let _ = ReleaseCapture(); } } }
+        if button == Button::Left && let Some((index, _, _)) = pressed
+            && self.hot_at(x, y) == Some(Hot::File(index))
+            && let Some(path) = island_files::list().get(index) {
+                crate::platform::launch::open(&path.to_string_lossy());
+        }
+        false
+    }
+
+    fn wheel(&mut self, _x: f32, y: f32, delta: i16) -> bool {
+        if self.dismissed && delta < 0 {
+            self.dismissed = false;
+            self.hovered = true;
+            self.animate();
+            self.schedule();
+            return true;
+        }
+        if self.expanded() && y < 36.0 * self.scale && delta > 0 {
+            self.dismissed = true;
+            self.hovered = false;
+            self.lyrics_pinned = false;
+            unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_PIN_TOP); }
+            self.hot = None;
+            self.animate();
+            self.schedule();
+            return true;
+        }
+
+        if self.tab != Tab::Files { return false; }
+        let max = island_files::list().len().saturating_sub(4);
+        let next = if delta > 0 { self.file_scroll.saturating_sub(1) } else { (self.file_scroll + 1).min(max) };
+        std::mem::replace(&mut self.file_scroll, next) != next
+    }
+
+    fn horizontal_wheel(&mut self, _x: f32, _y: f32, delta: i16) -> bool {
+        if !self.expanded() || self.tabs.len() < 2 || delta == 0 { return false; }
+        let steps = wheel_step(&mut self.horizontal_wheel_remainder, delta);
+        if steps == 0 { return false; }
+        let index = self.tabs.iter().position(|&tab| tab == self.tab).unwrap_or(0);
+        let next = (index as i32 + steps).clamp(0, self.tabs.len() as i32 - 1) as usize;
+        if next == index { return false; }
+        self.tab = self.tabs[next];
+        if self.tab != Tab::Lyrics { self.lyrics_pinned = false; unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_PIN_TOP); } }
+        self.hot = None;
+        self.thumb = None;
+        self.schedule();
+        true
+    }
+
     fn timer(&mut self, id: usize) -> bool {
         match id {
+            TIMER_PIN_TOP => { if self.lyrics_pinned { self.raise(); } return false; }
+            TIMER_LEAVE => {
+                if self.drag_over { return false; }
+                if self.lyrics_pinned && self.tab == Tab::Lyrics {
+                    unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_LEAVE); }
+                    return false;
+                }
+                let mut point = POINT::default();
+                if !self.dismissed && unsafe { GetCursorPos(&mut point) }.is_ok() && in_hover_area(self.monitor, self.scale, self.bar_height, point) {
+                    return false;
+                }
+                unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_LEAVE); }
+                self.dismissed = false;
+                self.hovered = false;
+                self.hot = None;
+                self.animate();
+                self.schedule();
+                return true;
+            }
             TIMER_ANIMATE => return self.step(),
             TIMER_NOTICE => {
                 unsafe {
@@ -773,6 +1304,7 @@ impl View for Island {
                 self.eq_step = self.eq_step.wrapping_add(1);
                 return true;
             }
+            TIMER_LYRICS_MOTION => return self.lyrics_motion_running,
             TIMER_TICK => {
                 // One-shot: re-armed below if still needed.
                 unsafe {
@@ -800,8 +1332,11 @@ impl View for Island {
         let pill = rect(0.0, 0.0, w, h);
         if let Ok(brush) = cx.gfx.brush(rgba(0, 0, 0, 1.0)) {
             unsafe { cx.dc.FillRoundedRectangle(&rounded(pill, radius), &brush) };
+            if self.style == IslandStyle::Notch {
+                unsafe { cx.dc.FillRectangle(&rect(0.0, 0.0, w, radius), &brush) };
+            }
         }
-        if let Ok(brush) = cx.gfx.brush(rgba(255, 255, 255, 0.10)) {
+        if self.style == IslandStyle::Island && let Ok(brush) = cx.gfx.brush(rgba(255, 255, 255, 0.06)) {
             unsafe { cx.dc.DrawRoundedRectangle(&rounded(rect(0.5, 0.5, w - 0.5, h - 0.5), radius), &brush, 1.0, None) };
         }
 
@@ -818,10 +1353,15 @@ impl View for Island {
             }
         }
         if panel_alpha > 0.0 {
-            self.paint_panel(cx, &formats, panel_alpha);
+            self.paint_tabs(cx, &formats, panel_alpha);
+            match self.tab {
+                Tab::Media => self.paint_panel(cx, &formats, panel_alpha),
+                Tab::Files => self.paint_files(cx, &formats, panel_alpha),
+                Tab::Lyrics => self.paint_lyrics(cx, &formats, panel_alpha),
+            }
         }
         self.sync_eq_layer(cx);
-        self.sync_thumbnail(panel_alpha);
+        self.sync_thumbnail(if self.tab == Tab::Media { panel_alpha } else { 0.0 });
         self.formats = Some(formats);
     }
 }
@@ -891,18 +1431,135 @@ fn build_formats(cx: &PaintCx) -> Option<Formats> {
         icon_small: make(text::ICON_FONT, 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER, false)?,
         title: make(text::UI_FONT, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, true)?,
         artist: make(text::UI_FONT, 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING, true)?,
+        tab: make(text::UI_FONT, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false)?,
         small: make(text::UI_FONT, 11.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING, false)?,
+        small_center: make(text::UI_FONT, 11.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER, false)?,
         small_right: make(text::UI_FONT, 11.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING, false)?,
         time: make(text::UI_FONT, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER, false)?,
         compact: make(text::UI_FONT, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING, false)?,
+        lyric: make(text::UI_FONT, 17.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, true)?,
+        lyric_active: text::format_px(&cx.gfx.dwrite, text::UI_FONT, 20.0*s, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, true).ok()?,
     })
 }
 
 const TEXT: D2D1_COLOR_F = rgba(255, 255, 255, 0.95);
 const DIM: D2D1_COLOR_F = rgba(255, 255, 255, 0.55);
 const CONTROL: D2D1_COLOR_F = rgba(255, 255, 255, 0.14);
+const SURFACE: D2D1_COLOR_F = rgba(255, 255, 255, 0.07);
+const TAB_SELECTED: D2D1_COLOR_F = rgba(255, 255, 255, 0.16);
+const LYRICS_BG_WIDTH: u32 = 40;
+const LYRICS_BG_HEIGHT: u32 = 20;
+
+/// A small blurred, darkened cover-derived background, built once per track.
+fn lyrics_background_pixels(art: Option<&media::Art>, colors: &[[u8; 3]]) -> Vec<u8> {
+    let w = LYRICS_BG_WIDTH as usize;
+    let h = LYRICS_BG_HEIGHT as usize;
+    let mut pixels = vec![0u8; w * h * 4];
+    let art = art.filter(|art| art.width > 0 && art.height > 0
+        && (art.width as usize).checked_mul(art.height as usize).and_then(|n| n.checked_mul(4)).is_some_and(|n| n <= art.pixels.len()));
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            if matches!(colors.len(), 12 | 96) {
+                let (grid_w, grid_h) = if colors.len() == 96 { (12, 8) } else { (4, 3) };
+                let fx = x as f32 * (grid_w - 1) as f32 / (w - 1) as f32;
+                let fy = y as f32 * (grid_h - 1) as f32 / (h - 1) as f32;
+                let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+                let (x1, y1) = ((x0 + 1).min(grid_w - 1), (y0 + 1).min(grid_h - 1));
+                for c in 0..3 {
+                    let sample = |xx: usize, yy: usize| f32::from(colors[yy * grid_w + xx][2 - c]);
+                    let upper = lerp(sample(x0, y0), sample(x1, y0), fx.fract());
+                    let lower = lerp(sample(x0, y1), sample(x1, y1), fx.fract());
+                    pixels[i + c] = lerp(upper, lower, fy.fract()) as u8;
+                }
+            } else if let Some(art) = art {
+                let sx = x * art.width as usize / w;
+                let sy = y * art.height as usize / h;
+                let source = (sy * art.width as usize + sx) * 4;
+                pixels[i..i + 3].copy_from_slice(&art.pixels[source..source + 3]);
+            } else {
+                pixels[i] = (64 + x * 22 / w) as u8;
+                pixels[i + 1] = (33 + y * 18 / h) as u8;
+                pixels[i + 2] = (53 + x * 16 / w) as u8;
+            }
+            pixels[i + 3] = 255;
+        }
+    }
+    // Repeated box passes soften artwork without holding a rendering effect
+    // or doing work on every animation frame.
+    for _ in 0..if colors.len() == 96 { 1 } else { 8 } {
+        let previous = pixels.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let mut total = [0u32; 3];
+                let mut count = 0;
+                for yy in y.saturating_sub(1)..=(y + 1).min(h - 1) {
+                    for xx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                        let i = (yy * w + xx) * 4;
+                        for c in 0..3 { total[c] += u32::from(previous[i + c]); }
+                        count += 1;
+                    }
+                }
+                let i = (y * w + x) * 4;
+                for c in 0..3 { pixels[i + c] = (total[c] / count) as u8; }
+            }
+        }
+    }
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        // Boost saturation before dimming, retaining contrast for white text.
+        let luminance = f32::from(pixel[0]) * 0.114 + f32::from(pixel[1]) * 0.587 + f32::from(pixel[2]) * 0.299;
+        let intensity = if colors.len() == 96 { 0.80 } else { 0.62 };
+        for channel in &mut pixel[..3] {
+            let saturated = luminance + (f32::from(*channel) - luminance) * 1.45;
+            *channel = (saturated * intensity + 9.0).clamp(0.0, 255.0) as u8;
+        }
+    }
+    pixels
+}
 
 impl Island {
+    fn lyrics_background_bitmap(&mut self, cx: &PaintCx) -> Option<ID2D1Bitmap1> {
+        let media = self.media.as_ref();
+        let track = media.map_or_else(String::new, |m| format!("{}\u{0}{}\u{0}{}", m.title, m.artist, m.album));
+        if self.lyrics_background_track != track {
+            self.lyrics_background = None;
+            self.lyrics_background_previous = None;
+            self.lyrics_background_changed = None;
+            self.lyrics_background_track = track;
+            self.lyrics_warp_source.clear();
+        }
+        let palette = media.and_then(|m| crate::services::lyrics::timed(m).or_else(|| crate::services::lyrics::live(m))).map_or_else(Vec::new, |live| live.colors);
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        media.map_or(0, |m| m.art_id).hash(&mut hash);
+        palette.hash(&mut hash);
+        let id = hash.finish();
+        if let Some((cached, bitmap)) = &self.lyrics_background && *cached == id {
+            let now = Instant::now();
+            let dt = self.lyrics_warp_frame.replace(now).map_or(0.0, |last| now.duration_since(last).as_secs_f32().min(0.1));
+            if self.lyrics_background_motion && self.hovered && media.is_some_and(|m| m.playing) { self.lyrics_warp_time += dt * 0.35; }
+            let pixels = if self.lyrics_background_motion {
+                crate::ui::kawarp::warp(&self.lyrics_warp_source, LYRICS_BG_WIDTH as usize, LYRICS_BG_HEIGHT as usize, self.lyrics_warp_time)
+            } else { self.lyrics_warp_source.clone() };
+            if !pixels.is_empty() { let _ = unsafe { bitmap.CopyFromMemory(None, pixels.as_ptr().cast(), LYRICS_BG_WIDTH * 4) }; }
+            return Some(bitmap.clone());
+        }
+        let art = media.filter(|m| !m.art_is_icon).and_then(|m| m.art.as_deref());
+        let pixels = lyrics_background_pixels(art, &palette);
+        self.lyrics_warp_source = pixels.clone();
+        self.lyrics_warp_frame = Some(Instant::now());
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0, dpiY: 96.0, bitmapOptions: D2D1_BITMAP_OPTIONS_NONE, colorContext: ManuallyDrop::new(None),
+        };
+        let bitmap = unsafe { cx.dc.CreateBitmap(D2D_SIZE_U { width: LYRICS_BG_WIDTH, height: LYRICS_BG_HEIGHT },
+            Some(pixels.as_ptr().cast()), LYRICS_BG_WIDTH * 4, &props) }.ok()?;
+        self.lyrics_background_previous = self.lyrics_background.take().map(|(_, bitmap)| bitmap);
+        self.lyrics_background_changed = Some(Instant::now());
+        self.lyrics_background = Some((id, bitmap.clone()));
+        Some(bitmap)
+    }
+
     /// The cover as a bitmap for this window's device context, cached per track.
     fn art_bitmap(&mut self, cx: &PaintCx) -> Option<ID2D1Bitmap1> {
         let media = self.media.as_ref()?;
@@ -920,7 +1577,7 @@ impl Island {
             colorContext: ManuallyDrop::new(None),
         };
         let bitmap = unsafe {
-            cx.dc.CreateBitmap(D2D_SIZE_U { width: art.size, height: art.size }, Some(art.pixels.as_ptr().cast()), art.size * 4, &props)
+            cx.dc.CreateBitmap(D2D_SIZE_U { width: art.width, height: art.height }, Some(art.pixels.as_ptr().cast()), art.width * 4, &props)
         };
         let id = media.art_id;
         match bitmap {
@@ -933,6 +1590,22 @@ impl Island {
                 None
             }
         }
+    }
+
+    fn app_icon_bitmap(&mut self, cx: &PaintCx) -> Option<ID2D1Bitmap1> {
+        let media = self.media.as_ref()?;
+        if let Some((id, bitmap)) = &self.app_icon && *id == media.art_id {
+            return Some(bitmap.clone());
+        }
+        let icon = media.app_icon.as_ref()?;
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0, dpiY: 96.0, bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+            colorContext: ManuallyDrop::new(None),
+        };
+        let bitmap = unsafe { cx.dc.CreateBitmap(D2D_SIZE_U { width: icon.width, height: icon.height }, Some(icon.pixels.as_ptr().cast()), icon.width * 4, &props) }.ok()?;
+        self.app_icon = Some((media.art_id, bitmap.clone()));
+        Some(bitmap)
     }
 
     /// The cover in `dest` with rounded corners, the playing app's icon on a
@@ -1048,7 +1721,11 @@ impl Island {
         if let Content::Media { .. } = content {
             let side = 18.0 * s;
             let dest = rect(left, mid - side / 2.0, left + side, mid + side / 2.0);
-            self.paint_art(cx, formats, dest, 5.0 * s, alpha);
+            if let Some(bitmap) = self.app_icon_bitmap(cx) {
+                unsafe { cx.dc.DrawBitmap(&bitmap, Some(&dest), alpha, windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None) };
+            } else {
+                text::draw(cx, GLYPH_MUSIC, &formats.icon_small, dest, with_alpha(DIM, alpha));
+            }
             left += side + 8.0 * s;
         }
         if matches!(content, Content::Media { .. }) {
@@ -1097,6 +1774,65 @@ impl Island {
     fn paint_notice(&mut self, cx: &PaintCx, formats: &Formats, notice: &Notice, alpha: f32) {
         let s = cx.scale;
         let (w, h) = (cx.width, cx.height);
+        if !matches!(notice.visual, NoticeVisual::Standard) {
+            let badge = rect(14.0 * s, (h - 32.0 * s) / 2.0, 46.0 * s, (h + 32.0 * s) / 2.0);
+            let (accent, title, detail) = match &notice.visual {
+                NoticeVisual::Power(battery) => {
+                    let (accent, title) = if battery.plugged {
+                        (rgba(48, 209, 88, 1.0), "Charging")
+                    } else if battery.percent <= BATTERY_LOW {
+                        (rgba(255, 69, 58, 1.0), "On battery")
+                    } else {
+                        (rgba(255, 255, 255, 0.8), "On battery")
+                    };
+                    (accent, title, None)
+                }
+                NoticeVisual::Network { connected, detail } => (
+                    if *connected { rgba(64, 156, 255, 1.0) } else { rgba(255, 159, 10, 1.0) },
+                    if *connected { "Network connected" } else { "Network disconnected" },
+                    Some(detail.as_str()),
+                ),
+                NoticeVisual::Standard => unreachable!(),
+            };
+            if let Ok(brush) = cx.gfx.brush(with_alpha(accent, alpha * 0.18)) {
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(badge, 10.0 * s), &brush) };
+            }
+            if let NoticeVisual::Power(battery) = &notice.visual {
+                // Draw a battery body and charge level, then overlay the bolt.
+                let body = rect(badge.left + 5.0*s, badge.top + 10.0*s, badge.right - 7.0*s, badge.bottom - 10.0*s);
+                if let Ok(brush) = cx.gfx.brush(with_alpha(accent, alpha)) {
+                    unsafe {
+                        cx.dc.DrawRoundedRectangle(&rounded(body, 2.5*s), &brush, 1.3*s, None);
+                        cx.dc.FillRoundedRectangle(&rounded(rect(body.right + s, body.top + 4.0*s, body.right + 3.0*s, body.bottom - 4.0*s), s), &brush);
+                        let inner = rect(body.left + 2.0*s, body.top + 2.0*s, body.left + 2.0*s + (body.right - body.left - 4.0*s) * f32::from(battery.percent.min(100)) / 100.0, body.bottom - 2.0*s);
+                        if inner.right > inner.left { cx.dc.FillRoundedRectangle(&rounded(inner, s), &brush); }
+                    }
+                }
+                if battery.plugged {
+                    for (x, y) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                        text::draw(cx, crate::ui::glyphs::CHARGING, &formats.icon_small,
+                            rect(badge.left + x*s, badge.top + y*s, badge.right + x*s, badge.bottom + y*s),
+                            with_alpha(rgba(0, 0, 0, 1.0), alpha));
+                    }
+                    text::draw(cx, crate::ui::glyphs::CHARGING, &formats.icon_small, badge, with_alpha(TEXT, alpha));
+                }
+                text::draw(cx, &format!("{}%", battery.percent), &formats.compact,
+                    rect(w - 58.0*s, 0.0, w - 16.0*s, h), with_alpha(accent, alpha));
+            } else {
+                text::draw(cx, notice.glyph, &formats.icon, badge, with_alpha(accent, alpha));
+            }
+            let right = if matches!(notice.visual, NoticeVisual::Power(_)) { w - 62.0*s } else { w - 16.0*s };
+            let left = badge.right + 10.0*s;
+            if right > left {
+                if let Some(detail) = detail {
+                    text::draw(cx, title, &formats.tab, rect(left, h/2.0 - 17.0*s, right, h/2.0), with_alpha(TEXT, alpha));
+                    text::draw(cx, detail, &formats.small, rect(left, h/2.0, right, h/2.0 + 16.0*s), with_alpha(DIM, alpha));
+                } else {
+                    text::draw(cx, title, &formats.artist, rect(left, 0.0, right, h), with_alpha(TEXT, alpha));
+                }
+            }
+            return;
+        }
         let pad = 16.0 * s;
         let glyph = rect(pad, 0.0, pad + 22.0 * s, h);
         text::draw(cx, notice.glyph, &formats.icon, glyph, with_alpha(TEXT, alpha));
@@ -1118,12 +1854,21 @@ impl Island {
 
     fn paint_panel(&mut self, cx: &PaintCx, formats: &Formats, alpha: f32) {
         let s = cx.scale;
-        let p = self.panel;
+        let mut p = self.panel;
+        if let Some(art) = self.media.as_ref().filter(|m| !m.art_is_icon).and_then(|m| m.art.as_ref()) {
+            let ratio = art.width as f32 / art.height.max(1) as f32;
+            let width = (90.0 * ratio).min(124.0);
+            let height = (width / ratio).min(90.0);
+            p.art = rect(16.0 * s, (56.0 + (90.0 - height) / 2.0) * s, (16.0 + width) * s, (56.0 + (90.0 + height) / 2.0) * s);
+            p.title.left = p.art.right + 12.0 * s;
+            p.artist.left = p.title.left;
+        }
         let media = self.media.clone();
         let now = now_ms();
 
         // Row 1: cover and track.
         self.paint_art(cx, formats, p.art, 10.0 * s, alpha);
+        self.paint_week(cx, formats, alpha);
         match &media {
             Some(m) => {
                 let artist = if m.artist.is_empty() { m.album.as_str() } else { m.artist.as_str() };
@@ -1148,7 +1893,14 @@ impl Island {
             text::draw(cx, &pomodoro::clock(m.length_ms), &formats.small_right, p.length, with_alpha(DIM, alpha));
         }
 
-        // Row 3: transport and Pomodoro.
+        // Keep playback centred and give the timer its own quieter surface.
+        if let Ok(brush) = cx.gfx.brush(with_alpha(SURFACE, alpha)) {
+            let timer_card = rect(16.0 * s, p.phase.top - 3.0 * s, 384.0 * s, p.phase.bottom + 3.0 * s);
+            unsafe { cx.dc.FillRoundedRectangle(&rounded(timer_card, 12.0 * s), &brush) };
+        }
+        if let Ok(brush) = cx.gfx.brush(with_alpha(SURFACE, alpha)) {
+            unsafe { cx.dc.FillRoundedRectangle(&rounded(p.play, 12.0 * s), &brush) };
+        }
         let button = |this: &Self, r: D2D_RECT_F, hot: Hot, glyph: &str, enabled: bool| {
             let color = if enabled { TEXT } else { rgba(255, 255, 255, 0.25) };
             if enabled && this.hot == Some(hot)
@@ -1204,6 +1956,28 @@ impl Drop for Island {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lyrics_background_uses_art_and_handles_missing_or_invalid_pixels() {
+        let fallback = lyrics_background_pixels(None, &[]);
+        assert_eq!(fallback.len(), (LYRICS_BG_WIDTH * LYRICS_BG_HEIGHT * 4) as usize);
+        let art = media::Art { width: 1, height: 1, pixels: vec![20, 40, 200, 255] };
+        let background = lyrics_background_pixels(Some(&art), &[]);
+        assert_ne!(background, fallback);
+        assert!(background.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        let invalid = media::Art { width: 2, height: 2, pixels: vec![] };
+        assert_eq!(lyrics_background_pixels(Some(&invalid), &[]), fallback);
+        assert_ne!(lyrics_background_pixels(Some(&art), &[[240, 20, 10]; 12]), background);
+    }
+
+    #[test]
+    fn horizontal_trackpad_steps_accumulate_and_change_direction() {
+        let mut remainder = 0;
+        assert_eq!(wheel_step(&mut remainder, 40), 0);
+        assert_eq!(wheel_step(&mut remainder, 80), 1);
+        assert_eq!(wheel_step(&mut remainder, -60), 0);
+        assert_eq!(wheel_step(&mut remainder, -60), -1);
+    }
     use crate::services::{Battery, Volume};
 
     fn monitor() -> RECT {
@@ -1212,13 +1986,15 @@ mod tests {
 
     #[test]
     fn frame_is_centred_and_hangs_from_the_top() {
-        let r = frame_rect(monitor(), (400.0, 158.0), 1.0);
+        let r = frame_rect(monitor(), (400.0, 158.0), 1.0, 30.0);
         assert_eq!((r.left, r.right), (760, 1160));
-        assert_eq!((r.top, r.bottom), (2, 160));
+        assert_eq!((r.top, r.bottom), (1, 159));
         let second = RECT { left: 1920, top: 0, right: 3840, bottom: 1080 };
-        assert_eq!(frame_rect(second, (92.0, 26.0), 1.0).left, 1920 + 960 - 46);
+        assert_eq!(frame_rect(second, (92.0, 26.0), 1.0, 30.0).left, 1920 + 960 - 46);
         // The gap scales with DPI.
-        assert_eq!(frame_rect(monitor(), (92.0, 26.0), 2.0).top, 4);
+        assert_eq!(frame_rect(monitor(), (92.0, 26.0), 2.0, 30.0).top, 3);
+        assert_eq!(frame_rect(monitor(), (92.0, 26.0), 1.0, 40.0).top, 6);
+        assert_eq!(frame_rect(monitor(), (115.0, 32.5), 1.25, 30.0).top, 1);
     }
 
     #[test]
@@ -1226,6 +2002,24 @@ mod tests {
         assert_eq!(compact_size(Content::Idle).0, IDLE.0);
         assert_eq!(compact_size(Content::Media { timer: true }).0, IDLE.0 + WIDTH_MEDIA + WIDTH_TIMER);
         assert!(compact_size(Content::Timer).0 > compact_size(Content::Idle).0);
+    }
+
+    #[test]
+    fn widget_order_respects_toggles_and_ignores_duplicates() {
+        let mut config = IslandConfig::default();
+        config.widget_order = vec!["notes".into(), "files".into(), "notes".into(), "invalid".into()];
+        assert_eq!(configured_tabs(&config), vec![Tab::Files, Tab::Media, Tab::Lyrics]);
+        config.file_shelf = false;
+        assert_eq!(configured_tabs(&config), vec![Tab::Media, Tab::Lyrics]);
+    }
+
+    #[test]
+    fn hover_area_covers_panel_and_scaled_margin() {
+        assert!(in_hover_area(monitor(), 1.0, 30.0, POINT { x: 960, y: 100 }));
+        assert!(in_hover_area(monitor(), 1.0, 30.0, POINT { x: 615, y: 4 }));
+        assert!(!in_hover_area(monitor(), 1.0, 30.0, POINT { x: 610, y: 4 }));
+        assert!(!in_hover_area(monitor(), 1.0, 30.0, POINT { x: 960, y: 260 }));
+        assert!(in_hover_area(monitor(), 2.0, 30.0, POINT { x: 550, y: 100 }));
     }
 
     #[test]
@@ -1249,6 +2043,15 @@ mod tests {
     }
 
     #[test]
+    fn compact_fractional_dpi_is_fully_opaque() {
+        for (width, scale) in [(201.0_f32, 1.25_f32), (203.0, 1.5), (92.0, 1.25)] {
+            let actual_client_width = (width * scale).round();
+            assert_eq!(expansion_from(actual_client_width, width, scale), 0.0);
+            assert_eq!(1.0 - ramp(expansion_from(actual_client_width, width, scale), 0.0, 0.45), 1.0);
+        }
+    }
+
+    #[test]
     fn panel_buttons_do_not_overlap() {
         let p = PanelLayout::new(1.0);
         let rects = [p.prev, p.play, p.next, p.phase, p.dec, p.time, p.inc, p.toggle, p.reset];
@@ -1256,6 +2059,21 @@ mod tests {
             assert!(a.right <= EXPANDED.0 && a.bottom <= EXPANDED.1);
             for b in &rects[i + 1..] {
                 assert!(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top);
+            }
+        }
+    }
+
+    #[test]
+    fn tabs_and_file_rows_stay_inside_expanded_panel() {
+        for scale in [1.0, 1.25, 2.0] {
+            for index in 0..3 {
+                let r = tab_rect(index, scale);
+                assert!(r.left >= 0.0 && r.right <= EXPANDED.0 * scale);
+                assert!(r.top >= 0.0 && r.bottom <= file_rect(0, scale).top);
+            }
+            for index in 0..4 {
+                let r = file_rect(index, scale);
+                assert!(r.bottom <= EXPANDED.1 * scale);
             }
         }
     }
@@ -1283,14 +2101,14 @@ mod tests {
     }
 
     #[test]
-    fn volume_and_mute_notices() {
+    fn volume_and_mute_do_not_show_notices() {
         let mut next = status();
         next.volume = Some(Volume { level: 0.62, muted: false });
-        let notice = notice_for(&status(), &next).unwrap();
-        assert_eq!(notice.text, "Volume 62%");
-        assert_eq!(notice.level, Some(0.62));
+        assert_eq!(notice_for(&status(), &next), None);
         next.volume = Some(Volume { level: 0.5, muted: true });
-        assert_eq!(notice_for(&status(), &next).unwrap().text, "Muted");
+        assert_eq!(notice_for(&status(), &next), None);
+        next.brightness = Some(60);
+        assert_eq!(notice_for(&status(), &next).unwrap().text, "Brightness 60%");
     }
 
     #[test]
@@ -1306,6 +2124,8 @@ mod tests {
         let mut next = status();
         next.battery = Some(Battery { percent: 80, plugged: true, charging: true });
         assert_eq!(notice_for(&status(), &next).unwrap().text, "Charging 80%");
+        assert_eq!(notice_for(&status(), &next).unwrap().visual, NoticeVisual::Power(next.battery.unwrap()));
+        assert_eq!(notice_for(&next, &status()).unwrap().visual, NoticeVisual::Power(status().battery.unwrap()));
 
         let mut prev = status();
         prev.battery = Some(Battery { percent: 21, plugged: false, charging: false });
@@ -1316,6 +2136,13 @@ mod tests {
         let mut lower = status();
         lower.battery = Some(Battery { percent: 19, plugged: false, charging: false });
         assert_eq!(notice_for(&low, &lower), None);
+
+        let mut almost = status();
+        almost.battery = Some(Battery { percent: 99, plugged: true, charging: true });
+        let mut full = status();
+        full.battery = Some(Battery { percent: 100, plugged: true, charging: false });
+        assert_eq!(notice_for(&almost, &full).unwrap().text, "Battery full");
+        assert_eq!(notice_for(&full, &full), None);
     }
 
     #[test]
@@ -1325,6 +2152,10 @@ mod tests {
         let other = SystemStatus { network: NetState::Wired, ..Default::default() };
         assert_eq!(notice_for(&wifi(40), &other).unwrap().text, "Ethernet connected");
         assert_eq!(notice_for(&other, &SystemStatus::default()).unwrap().text, "Offline");
+        assert_eq!(notice_for(&other, &wifi(40)).unwrap().visual,
+            NoticeVisual::Network { connected: true, detail: "home".into() });
+        assert_eq!(notice_for(&other, &SystemStatus::default()).unwrap().visual,
+            NoticeVisual::Network { connected: false, detail: "No connection".into() });
     }
 
     #[test]

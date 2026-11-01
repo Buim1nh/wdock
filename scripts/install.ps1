@@ -43,6 +43,14 @@ if (Get-Process wdock -ErrorAction SilentlyContinue) {
 
 New-Item -ItemType Directory -Force $dir | Out-Null
 Copy-Item $built $exe -Force
+# Fonts the settings panel's "Use font in Windows" can install (see fonts\README.md).
+$fonts = Join-Path $root 'fonts'
+$fontFiles = Get-ChildItem -LiteralPath $fonts -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.ttf', '.otf' }
+if ($fontFiles) {
+    $fontDest = Join-Path $env:LOCALAPPDATA 'wdock\fonts'
+    New-Item -ItemType Directory -Force $fontDest | Out-Null
+    $fontFiles | Copy-Item -Destination $fontDest -Force
+}
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $task = @{
     TaskName    = 'wdock'

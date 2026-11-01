@@ -45,7 +45,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
 ### Top bar
 
 - Nút launcher và nút Overview.
-- Ô chọn workspace (mặc định 4 workspace cho mỗi màn hình).
+- Các nút desktop ảo Windows đồng bộ trên mọi màn hình (Windows 11 24H2 từ build 26100.2605 hoặc 25H2 build 26200). Với build khác, nút được ẩn vì giao diện shell này không được Microsoft công bố.
 - Tiêu đề cửa sổ đang mở.
 - Khay hệ thống do wdock tự giữ: icon, thông báo balloon và phần tràn (overflow) hoạt động như trên taskbar.
 - Biểu tượng âm lượng, mạng, pin; bấm vào để mở Quick Settings.
@@ -76,22 +76,29 @@ Tất cả ảnh có độ phân giải 1920×1080.
 
 Viên thuốc ở giữa đỉnh mỗi màn hình, rê chuột vào thì mở rộng.
 
+- **Widget:** Island mở rộng có các tab Media và Files. Trong **wdock settings**, bật/tắt **Island file shelf** và đổi **Order (M/F)** để sắp xếp Media/Files. Pomodoro nằm trong Media.
+- **Kiểu và thao tác:** trong wdock settings, chọn **Island style** để chuyển giữa Island và Notch; dùng **Notch width** để chỉnh độ rộng khi thu gọn. Cuộn ngang trên bảng mở rộng để đổi tab. Cuộn lên trên hàng tab để thu gọn, cuộn xuống trên notch hoặc island thu gọn để mở lại. Cuộn dọc trong Files vẫn dùng để xem danh sách tệp.
+- **Files:** kéo file hoặc thư mục từ Explorer vào Island; kéo một mục ra ứng dụng tương thích, bấm để mở, hoặc bấm × để bỏ tham chiếu. Cuộn chuột để xem thêm. Khay lưu tối đa 32 đường dẫn, không sao chép nội dung; nếu file gốc bị xóa hoặc chuyển đi thì tham chiếu có thể không còn dùng được.
 - **Đang phát:** dùng được với mọi app có điều khiển media của Windows (Spotify, trình duyệt, trình phát nhạc).
+Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
+Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
+Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
   - Tên bài, ca sĩ, play/pause, bài trước/sau và thanh tiến độ kéo tua được.
   - Hiện ảnh bìa nếu app cung cấp. Nhiều trang web không có ảnh bìa (trình duyệt chỉ chuyển tiếp những gì trang khai báo), khi đó island hiện biểu tượng app đang phát, và khi mở rộng thì hiện khung hình trực tiếp của cửa sổ đang phát.
   - Equalizer chuyển động khi đang phát. Bộ dựng hình của Windows (DWM) tự chạy hoạt ảnh này, nên wdock không tốn công cho từng khung hình.
 - **Pomodoro:** start, pause, reset ngay trên island mở rộng. Khi đang rảnh, bấm nhãn Focus / Break để chọn thời lượng cần sửa rồi dùng − / + (Focus 5-90 phút, bước 5; Break 1-30 phút, bước 1). Lựa chọn được nhớ trong `%LOCALAPPDATA%\wdock\pomodoro.txt`; `pomodoro_work` / `pomodoro_break` vẫn là giá trị mặc định. Viên thuốc thu gọn hiện số phút còn lại; hết mỗi phiên Focus hoặc Break có tiếng chuông và thông báo.
 - **Chấm riêng tư:** chấm cam khi có app dùng micro, chấm xanh khi dùng camera, kèm thông báo ngắn lúc bắt đầu. wdock theo dõi kho consent của Windows bằng thông báo thay đổi registry, không polling.
-- **Thông báo:** island giãn ra trong chốc lát khi đổi âm lượng, độ sáng, cắm/rút sạc, pin yếu, đổi mạng hoặc đổi thiết bị âm thanh, kể cả khi chỉnh âm lượng bằng nút trên tai nghe hay bàn phím. Thay đổi bằng thanh trượt của chính wdock thì island không giãn ra. Các pop-up gốc của Windows vẫn giữ nguyên.
+- **Thông báo:** island giãn ra trong chốc lát khi đổi độ sáng, cắm/rút sạc, pin yếu, đổi mạng hoặc đổi thiết bị âm thanh. Thay đổi bằng thanh trượt của chính wdock thì island không giãn ra. Các pop-up gốc của Windows, bao gồm âm lượng, vẫn giữ nguyên.
 
 ### Launcher và cửa sổ
 
 - **Launcher:** tìm gần đúng (fuzzy) trong các app đã cài (Win32 và Store) và các trang Settings.
-- **Overview** các cửa sổ của workspace hiện tại (nút cạnh launcher, hoặc bấm số workspace đang chọn), và **workspace ảo** cho từng màn hình. Bấm một số workspace để chuyển sang đó.
+- **Overview** các cửa sổ của desktop Windows hiện tại. Bấm số desktop để chuyển; kéo cửa sổ trong Overview vào desktop để di chuyển cửa sổ.
 
 ### Icon khay
 
-- Bấm chuột phải vào icon trên top bar, chọn **Hide from top bar** để chuyển icon vào nút mũi tên tràn. Nút này chỉ hiện khi có icon bị ẩn. **Show on top bar** đưa icon trở lại.
+- Kéo icon vào mũi tên để ẩn, hoặc kéo icon từ hộp ra top bar để hiện. Menu chuột phải cũng có **Hide from top bar** và **Show on top bar**.
+- wdock đọc cài đặt icon khay của Windows khi nhận diện được icon; thay đổi trong Windows được cập nhật, trừ khi bạn đã chọn riêng vị trí đó trong wdock.
 - Lựa chọn được lưu theo từng app trong `%LOCALAPPDATA%\wdock	ray-hidden.txt`, khớp theo tên file thực thi (và theo GUID của icon khi app có GUID).
 - Cùng menu đó có **Open the app's menu** để chuyển cú nhấp chuột cho app.
 
@@ -194,12 +201,12 @@ Nếu Win+Alt+Space đã bị app khác chiếm, wdock ghi vào log và launcher
 Thay đổi tùy chọn không cần chạy lại trình cài đặt. Bấm vào các icon trạng thái trên top bar, rồi chọn **Cài đặt wdock**. Panel này chỉnh được:
 
 - giao diện, nền (backdrop), top bar trên tất cả màn hình hoặc chỉ màn hình chính
-- tự ẩn dock, Dynamic Island, hiệu ứng equalizer
+- tự ẩn dock, Dynamic Island, hiệu ứng equalizer và các widget của Island
 - khởi động cùng Windows (một tác vụ theo người dùng tên `wdock`, cùng tác vụ mà trình cài đặt tạo)
 
 Mỗi thay đổi được lưu vào `config.toml` (giữ nguyên chú thích và các khóa khác) và áp dụng ngay. **Mở file cấu hình** mở file trong trình soạn thảo mặc định, để chỉnh các khóa khác.
 
-Các khóa không có trong panel (ví dụ `[workspaces]`, `[dock] icon_size` hoặc phím tắt) vẫn cần khởi động lại: bấm Ctrl+Alt+Shift+Q rồi chạy `Start-ScheduledTask wdock` trong PowerShell, hoặc đăng xuất rồi đăng nhập lại.
+Các khóa không có trong panel vẫn cần khởi động lại: bấm Ctrl+Alt+Shift+Q rồi chạy `Start-ScheduledTask wdock` trong PowerShell, hoặc đăng xuất rồi đăng nhập lại.
 
 ## Cấu hình
 
@@ -214,11 +221,12 @@ File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động 
 | `[performance]` | `renderer` = `"software"` (WARP, khoảng 10 MB, không đánh thức GPU rời) hoặc `"gpu"` |
 | `[topbar]` | `height` (30), `monitors` (`"all"` hoặc `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible`: số icon trước nút tràn (12); `overflow`: các tên file chạy luôn bị đưa vào phần tràn |
-| `[dock]` | `icon_size` (32), `monitors` (`"primary"`), `windows` (`"all"` hoặc `"this-monitor"`), `magnification` (2.0), `auto_hide` (`"smart"`, `"on"`, `"off"`), `pinned` |
-| `[workspaces]` | `count`: số workspace mỗi màn hình (4, tối đa 9) |
-| `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
+| `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` hoặc `"glass"`), `hover_size` tùy chọn, `magnification` cũ (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
+| `[island]` | `enabled`, `file_shelf`, `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
 
-Ghim, bỏ ghim hoặc sắp xếp lại trên dock sẽ lưu danh sách vào `%LOCALAPPDATA%\wdock\pinned.txt`, và file này được ưu tiên hơn `pinned`; xóa file đó để quay lại dùng cấu hình.
+Khi chưa có danh sách ghim riêng, wdock nhập các app từ taskbar Windows theo thứ tự và sao chép shortcut vào thư mục dữ liệu của mình. Các thay đổi sau đó chỉ lưu vào `%LOCALAPPDATA%\wdock\pinned.txt`, không sửa taskbar Windows. Nếu nhập thất bại, wdock tạm dùng danh sách trong cấu hình và thử lại lần khởi động sau. Giao diện Windows dùng để nhập chưa được Microsoft công bố.
+
+Trong **wdock settings**, chọn **Dock hover** để đổi giữa phóng to và Glass; dùng dấu −/+ ở **Icon size** và **Hover size** để chỉnh kích thước. Đơn vị là pixel độc lập DPI (Windows scale được áp dụng theo từng màn hình). Icon thường từ 16–96, icon khi hover tối đa 192 và không quá 3 lần kích thước thường. `hover_size` chỉ có tác dụng trong chế độ phóng to; khi chưa đặt, `magnification` cũ vẫn được tôn trọng.
 
 Dữ liệu và log nằm trong `%LOCALAPPDATA%\wdock\`:
 
@@ -226,9 +234,8 @@ Dữ liệu và log nằm trong `%LOCALAPPDATA%\wdock\`:
 |---|---|
 | `logs\wdock.log`, `logs\wdock-guard.log` | log (xoay vòng khi vượt 2 MB) |
 | `pinned.txt` | app ghim, theo thứ tự trên dock |
-| `hidden.txt` | cửa sổ đang ở workspace khác |
 | `taskbar.txt` | trạng thái auto-hide gốc của explorer |
-| `tray-hidden.txt` | icon khay bị ẩn khỏi top bar |
+| `tray-hidden.txt`, `tray-shown.txt` | lựa chọn vị trí icon khay trong wdock |
 
 ## Xử lý sự cố
 
@@ -250,7 +257,7 @@ Script này:
 
 1. Gỡ scheduled task (và mục `Run` của các bản cài cũ).
 2. Dừng guard rồi dừng shell.
-3. Trả lại taskbar của explorer và các cửa sổ đang ẩn ở workspace khác.
+3. Trả lại taskbar của explorer (và các cửa sổ mà bản cũ còn để ẩn).
 
 `-RemoveFiles` xóa luôn file chạy, `-RemoveData` xóa log, cache và trạng thái. File cấu hình luôn được giữ lại.
 
@@ -280,7 +287,7 @@ Mã nguồn nằm trong `crates/wdock/src`:
 | `ui/` | các thanh Direct2D, dock, island, popup, lớp composition |
 | `platform/` | lớp bọc Win32, tray host, AppBar, sự kiện cửa sổ |
 | `services/` | âm thanh, mạng và Wi-Fi, nguồn, độ sáng, phiên media, chỉ mục app, icon |
-| `model/` | cấu hình, cửa sổ và workspace, khay, tìm kiếm, Pomodoro |
+| `model/` | cấu hình, cửa sổ, khay, tìm kiếm, Pomodoro |
 
 ## Kết quả đo
 

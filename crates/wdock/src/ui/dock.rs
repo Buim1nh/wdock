@@ -21,38 +21,33 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::{D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, ID2D1Bitmap1};
 use windows::Win32::Graphics::DirectWrite::{DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER};
 use windows::Win32::Graphics::Gdi::HMONITOR;
-use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, KillTimer, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow,
 };
 use windows::core::Result;
 
-use crate::model::config::{AutoHide, Backdrop, DockConfig, DockWindows};
+use crate::model::config::{AutoHide, DockConfig, DockHoverEffect, DockWindows};
 use crate::model::windows::{Entry, EntrySource, WindowModel};
 use crate::platform::monitors::Monitor;
 use crate::platform::{launch, wininfo};
-use crate::ui::backdrop::{Corners, DWM_CORNER_RADIUS};
+use crate::ui::backdrop::Corners;
 use crate::ui::bar::{self, BarSpec, Button, PaintCx, View};
-use crate::services::icons;
 use crate::ui::gfx::{Gfx, rect, rgba, rounded};
 use crate::ui::popup;
 use crate::ui::popups::menu::MenuItem;
 use crate::ui::text;
 use crate::ui::theme::Theme;
 
-const PADDING: f32 = 6.0;
+const PADDING: f32 = 7.0;
 const GAP: f32 = 4.0;
 /// Extra room around each icon for the hover plate.
-const SLOT_INSET: f32 = 4.0;
+const SLOT_INSET: f32 = 5.0;
 /// Extra space between pinned and running apps, holding the divider.
 const SEPARATOR: f32 = 10.0;
-const MARGIN_BOTTOM: f32 = 8.0;
-const DOT: f32 = 4.0;
-/// Cache-key prefix of resting-size icon bitmaps.
-const REST: &str = "rest:";
-const ACTIVE_DOT_WIDTH: f32 = 12.0;
+const MARGIN_BOTTOM: f32 = 10.0;
+const DOT: f32 = 3.0;
+const ACTIVE_DOT_WIDTH: f32 = 9.0;
 /// Room above a hovered icon for its name.
 const LABEL: f32 = 30.0;
 /// How many slots to either side of the pointer magnification reaches.
@@ -70,7 +65,13 @@ const FRAME_MS: u32 = 15;
 const PREVIEW_DELAY_MS: u32 = 500;
 const HIDE_DELAY_MS: u32 = 600;
 /// Fraction of the remaining distance covered per animation frame.
-const EASE: f32 = 0.3;
+const EASE: f32 = 0.23;
+const SHELF_RADIUS: f32 = 14.0;
+
+fn smooth_pointer(current: &mut f32, target: f32) {
+    *current += (target - *current) * EASE;
+    if (target - *current).abs() < 0.5 { *current = target; }
+}
 
 /// Where the shelf should be, shared from the overlay that lays it out.
 #[derive(Clone, Copy, Default)]
@@ -115,12 +116,15 @@ impl View for Shelf {
     }
 
     fn paint(&mut self, cx: &PaintCx) {
-        let radius = DWM_CORNER_RADIUS * cx.scale;
-        if cx.theme.backdrop == Backdrop::Solid
-            && let Ok(brush) = cx.gfx.brush(cx.theme.solid_fill) {
-                unsafe { cx.dc.FillRoundedRectangle(&rounded(rect(0.0, 0.0, cx.width, cx.height), radius), &brush) };
-            }
-        if let Ok(brush) = cx.gfx.brush(cx.theme.border) {
+        let radius = SHELF_RADIUS * cx.scale;
+        // A translucent tint keeps the background readable without applying a
+        // blur effect or blurring the icons drawn in the separate overlay.
+        let fill = if cx.theme.dark { rgba(32, 32, 34, 0.96) } else { rgba(245, 245, 246, 0.96) };
+        if let Ok(brush) = cx.gfx.brush(fill) {
+            unsafe { cx.dc.FillRoundedRectangle(&rounded(rect(0.0, 0.0, cx.width, cx.height), radius), &brush) };
+        }
+        let edge = if cx.theme.dark { rgba(255, 255, 255, 0.14) } else { rgba(0, 0, 0, 0.14) };
+        if let Ok(brush) = cx.gfx.brush(edge) {
             let inset = rect(0.5, 0.5, cx.width - 0.5, cx.height - 0.5);
             unsafe { cx.dc.DrawRoundedRectangle(&rounded(inset, radius), &brush, 1.0, None) };
         }
@@ -133,7 +137,7 @@ pub fn reserved_height(config: &DockConfig) -> f32 {
     if config.auto_hide != AutoHide::Off {
         return 0.0;
     }
-    PADDING * 2.0 + config.icon_size + SLOT_INSET * 2.0 + MARGIN_BOTTOM
+    PADDING * 2.0 + config.base_icon_size() + SLOT_INSET * 2.0 + MARGIN_BOTTOM
 }
 
 /// Creates the shelf and the dock overlay for one monitor. Destroy the
@@ -145,7 +149,7 @@ pub fn create(gfx: &Rc<Gfx>, theme: &Rc<Theme>, config: &DockConfig, model: Rc<R
     let shelf = bar::create(
         gfx.clone(),
         theme.clone(),
-        BarSpec { rect: shelf_rect, scale: monitor.scale, corners: Corners::Round, activate: false },
+        BarSpec { rect: shelf_rect, scale: monitor.scale, corners: Corners::None, activate: false },
         Box::new(Shelf { hwnd: HWND::default(), frame: shared.clone(), shown: true, suspended: false }),
     )?;
     bar::refresh_now(shelf);
@@ -214,12 +218,12 @@ pub struct Dock {
     entries: Vec<Entry>,
     pins_revision: u64,
     bitmaps: HashMap<String, ID2D1Bitmap1>,
-    /// Resamples icons to their resting size, so they draw 1:1 and stay sharp.
-    wic: Option<IWICImagingFactory>,
     layout: Layout,
 
     /// Pointer in screen pixels while it is over the dock.
     pointer: Option<POINT>,
+    /// Smoothed pointer position, used only by the magnification animation.
+    hover_x: Option<f32>,
     hover: Option<usize>,
     drag: Option<Drag>,
     pending_preview: Option<usize>,
@@ -239,15 +243,18 @@ impl Dock {
             model,
             filter: (config.windows == DockWindows::ThisMonitor).then_some(monitor.handle),
             monitor: *monitor,
-            icon_size: config.icon_size,
-            magnification: config.magnification.clamp(1.0, 3.0),
+            icon_size: config.base_icon_size(),
+            magnification: match config.hover_effect {
+                DockHoverEffect::Glass => 1.0,
+                DockHoverEffect::Magnify => config.hover_icon_size() / config.base_icon_size(),
+            },
             auto_hide: config.auto_hide,
             entries: Vec::new(),
             pins_revision: 0,
             bitmaps: HashMap::new(),
-            wic: unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }.ok(),
             layout: Layout::default(),
             pointer: None,
+            hover_x: None,
             hover: None,
             drag: None,
             pending_preview: None,
@@ -290,7 +297,7 @@ impl Dock {
         let model = self.model.borrow();
         let live: Vec<String> = self.entries.iter().filter_map(|e| model.entry_icon(e).map(|(k, _)| k)).collect();
         drop(model);
-        self.bitmaps.retain(|key, _| live.contains(key) || key.strip_prefix(REST).is_some_and(|k| live.iter().any(|l| l == k)));
+        self.bitmaps.retain(|key, _| live.contains(key));
         if self.hover.is_some_and(|h| h >= self.entries.len()) {
             self.hover = None;
         }
@@ -311,11 +318,11 @@ impl Dock {
     /// Magnification of each slot for the pointer position.
     fn factors(&self, rest_centres: &[f32]) -> Vec<f32> {
         let amount = (self.magnification - 1.0) * self.zoom;
-        match self.pointer {
-            Some(p) if amount > 0.0 && !self.dragging() => rest_centres
+        match self.hover_x {
+            Some(pointer_x) if amount > 0.0 && !self.dragging() => rest_centres
                 .iter()
                 .map(|&c| {
-                    let d = (p.x as f32 - c).abs() / self.slot();
+                    let d = (pointer_x - c).abs() / self.slot();
                     let falloff = if d < MAGNIFY_RANGE { ((PI * d / MAGNIFY_RANGE).cos() + 1.0) / 2.0 } else { 0.0 };
                     1.0 + amount * falloff
                 })
@@ -513,7 +520,11 @@ impl Dock {
 
     /// Starts the frame timer if zoom or reveal are not at their targets.
     fn animate(&mut self) {
-        let settled = self.zoom == self.zoom_target() && self.reveal == self.reveal_target();
+        let pointer_settled = match (self.pointer, self.hover_x) {
+            (Some(p), Some(x)) if self.magnification > 1.0 && !self.dragging() => (p.x as f32 - x).abs() < 0.5,
+            _ => true,
+        };
+        let settled = self.zoom == self.zoom_target() && self.reveal == self.reveal_target() && pointer_settled;
         if !settled && !self.animating && !self.hwnd.is_invalid() {
             self.animating = true;
             unsafe { SetTimer(Some(self.hwnd), TIMER_ANIMATE, FRAME_MS, None) };
@@ -529,6 +540,9 @@ impl Dock {
         };
         let (zoom, reveal) = (self.zoom_target(), self.reveal_target());
         approach(&mut self.zoom, zoom);
+        if let (Some(pointer), Some(x)) = (self.pointer, &mut self.hover_x) {
+            smooth_pointer(x, pointer.x as f32);
+        }
         // Reveal slides in faster than it slides out.
         if reveal > self.reveal {
             approach(&mut self.reveal, reveal);
@@ -536,8 +550,13 @@ impl Dock {
         } else {
             approach(&mut self.reveal, reveal);
         }
-        if self.zoom == zoom && self.reveal == reveal {
+        let pointer_settled = match (self.pointer, self.hover_x) {
+            (Some(p), Some(x)) if self.magnification > 1.0 && !self.dragging() => p.x as f32 == x,
+            _ => true,
+        };
+        if self.zoom == zoom && self.reveal == reveal && pointer_settled {
             self.animating = false;
+            if self.pointer.is_none() { self.hover_x = None; }
             unsafe {
                 let _ = KillTimer(Some(self.hwnd), TIMER_ANIMATE);
             }
@@ -562,8 +581,7 @@ impl Dock {
         let centre = (m.left + m.right) / 2;
         let dock = RECT { left: centre - half as i32, top, right: centre + half as i32, bottom };
         let model = self.model.borrow();
-        let workspace = model.active_workspace(self.monitor.handle);
-        model.workspace_windows(self.monitor.handle, workspace).into_iter().any(|hwnd| {
+        model.monitor_windows(self.monitor.handle).into_iter().any(|hwnd| {
             if wininfo::is_minimized(hwnd) || !wininfo::is_visible(hwnd) {
                 return false;
             }
@@ -617,10 +635,6 @@ impl Dock {
             if label.is_empty() {
                 label = model.entry_name(&entry).to_owned();
             }
-            if model.is_hidden(hwnd)
-                && let Some((_, ws)) = model.placement(hwnd) {
-                    label = format!("{label}  ·  Workspace {}", ws + 1);
-                }
             let target = self.model.clone();
             items.push(MenuItem::action(label, move || target.borrow_mut().focus(hwnd)));
         }
@@ -652,6 +666,10 @@ impl Dock {
             let label = if entry.windows.len() == 1 { "Close window".to_owned() } else { format!("Close {} windows", entry.windows.len()) };
             let windows = entry.windows.clone();
             items.push(MenuItem::action(label, move || windows.iter().for_each(|&w| wininfo::close(w))));
+            if wininfo::end_task_enabled() {
+                let targets: Vec<_> = entry.windows.iter().map(|&hwnd| (hwnd, wininfo::content_process_id(hwnd))).collect();
+                items.push(MenuItem::action("End task", move || wininfo::end_tasks(&targets)));
+            }
         }
         drop(model);
         let slot = self.slot_screen(index);
@@ -738,20 +756,14 @@ impl Dock {
         (self.icon_size * self.s()).round() as u32
     }
 
-    /// The icon at full (magnified) resolution, or with `rest`, resampled to
-    /// exactly `rest_px` for 1:1 drawing.
-    fn icon_bitmap(&mut self, cx: &PaintCx, index: usize, rest: bool) -> Option<ID2D1Bitmap1> {
+    /// Cache one shell-provided bitmap per icon for both rest and hover.
+    fn icon_bitmap(&mut self, cx: &PaintCx, index: usize) -> Option<ID2D1Bitmap1> {
         let model = self.model.borrow();
         let (key, image) = model.entry_icon(&self.entries[index])?;
-        let key = if rest { format!("{REST}{key}") } else { key };
         if let Some(bitmap) = self.bitmaps.get(&key) {
             return Some(bitmap.clone());
         }
-        let image = match (&self.wic, rest) {
-            (Some(wic), true) => icons::resize(wic, image, self.rest_px()).ok()?,
-            _ => image.clone(),
-        };
-        match unsafe { cx.dc.CreateBitmapFromWicBitmap(&image, None) } {
+        match unsafe { cx.dc.CreateBitmapFromWicBitmap(image, None) } {
             Ok(bitmap) => {
                 self.bitmaps.insert(key, bitmap.clone());
                 Some(bitmap)
@@ -761,6 +773,21 @@ impl Dock {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hover_motion_converges_and_stops() {
+        let mut x = 0.0;
+        for _ in 0..100 {
+            let previous = x;
+            super::smooth_pointer(&mut x, 300.0);
+            assert!(x >= previous && x <= 300.0);
+            if x == 300.0 { break; }
+        }
+        assert_eq!(x, 300.0);
     }
 }
 
@@ -809,12 +836,16 @@ impl View for Dock {
             if self.hover == Some(index) && self.magnification <= 1.0 && dragged.is_none()
                 && let Ok(brush) = cx.gfx.brush(cx.theme.hover) {
                     unsafe { cx.dc.FillRoundedRectangle(&rounded(slot, 10.0 * s), &brush) };
+                    if let Ok(border) = cx.gfx.brush(cx.theme.border) {
+                        let frame = rect(slot.left + 0.5 * s, slot.top + 0.5 * s, slot.right - 0.5 * s, slot.bottom - 0.5 * s);
+                        unsafe { cx.dc.DrawRoundedRectangle(&rounded(frame, 10.0 * s), &border, s.max(1.0), None) };
+                    }
                 }
             let resting = factor < 1.005;
-            if let Some(bitmap) = self.icon_bitmap(cx, index, resting) {
+            if let Some(bitmap) = self.icon_bitmap(cx, index) {
                 let pad = inset * factor;
                 let dest = if resting {
-                    // Whole pixels at the bitmap's exact size: no resampling blur.
+                    // Align the requested icon bounds to device pixels.
                     let size = self.rest_px() as f32;
                     let (left, top) = ((slot.left + pad).round(), (slot.bottom - pad - size).round());
                     rect(left, top, left + size, top + size)
@@ -863,7 +894,7 @@ impl View for Dock {
                 }
             }
             // The dragged icon follows the pointer, faded when it would be removed.
-            if let Some(bitmap) = self.icon_bitmap(cx, index, false) {
+            if let Some(bitmap) = self.icon_bitmap(cx, index) {
                 let (x, y) = self.local(p);
                 let half = (self.slot() - inset * 2.0) / 2.0;
                 let (x, y) = (x.clamp(half, cx.width - half), y.clamp(half, cx.height - half));
@@ -901,6 +932,7 @@ impl View for Dock {
             return self.leave();
         }
         self.pointer = Some(p);
+        if self.hover_x.is_none() { self.hover_x = Some(p.x as f32); }
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_HIDE);
         }

@@ -15,7 +15,6 @@ use crate::platform::launch;
 use crate::platform::session::{self, SessionAction};
 use crate::services::audio::{Output, OutputKind};
 use crate::services::{self, NetState, SystemStatus};
-use crate::ui::backdrop::DWM_CORNER_RADIUS;
 use crate::ui::bar::{self, Button, PaintCx, View};
 use crate::ui::gfx::{rect, rounded};
 use crate::ui::glyphs;
@@ -34,7 +33,16 @@ const INFO_LINE: f32 = 22.0;
 const OUTPUT_ROW: f32 = 30.0;
 const GAP: f32 = 10.0;
 const TIMER_CONFIRM: usize = 1;
+const TIMER_WIFI_ANIMATE: usize = 2;
+const WIFI_FRAME_MS: u32 = 15;
+const PANEL_RADIUS: f32 = 16.0;
 const CONFIRM_MS: u32 = 3000;
+
+fn animate_wifi(progress: f32, open: bool) -> (f32, bool) {
+    let target = if open { 1.0 } else { 0.0 };
+    let next = progress + (target - progress) * 0.28;
+    if (target - next).abs() < 0.01 { (target, true) } else { (next, false) }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Hit {
@@ -83,6 +91,9 @@ pub struct QuickSettingsView {
     outputs_open: bool,
     /// The Wi-Fi list; `Some` (and scanning) only while expanded.
     wifi: Option<WifiPanel>,
+    wifi_open: bool,
+    wifi_progress: f32,
+    wifi_clip: D2D_RECT_F,
 }
 
 impl QuickSettingsView {
@@ -101,6 +112,9 @@ impl QuickSettingsView {
             outputs: services::audio_outputs(),
             outputs_open: false,
             wifi: None,
+            wifi_open: false,
+            wifi_progress: 0.0,
+            wifi_clip: rect(0.0, 0.0, 0.0, 0.0),
         };
         view.layout();
         view
@@ -116,7 +130,11 @@ impl QuickSettingsView {
         self.targets.push((Hit::Network, rect(left, y, right, y + TILE * s)));
         y += (TILE + GAP) * s;
         if let Some(wifi) = &mut self.wifi {
-            y = wifi.layout(left, right, y - GAP * s / 2.0, s) + GAP * s;
+            let top = y - GAP * s / 2.0;
+            let bottom = wifi.layout(left, right, top, s);
+            let visible = (bottom - top) * self.wifi_progress;
+            self.wifi_clip = rect(left, top, right, top + visible);
+            y += (bottom - top + GAP * s / 2.0) * self.wifi_progress;
         }
 
         let slider = |hit: Hit, y: &mut f32, targets: &mut Vec<_>, tracks: &mut Vec<_>| {
@@ -164,7 +182,8 @@ impl QuickSettingsView {
     }
 
     fn hit(&self, x: f32, y: f32) -> Option<Hit> {
-        if let Some(hit) = self.wifi.as_ref().and_then(|w| w.hit(x, y)) {
+        if self.wifi_open && self.wifi_progress >= 1.0
+            && let Some(hit) = self.wifi.as_ref().and_then(|w| w.hit(x, y)) {
             return Some(Hit::Wifi(hit));
         }
         self.targets
@@ -226,6 +245,8 @@ impl View for QuickSettingsView {
         self.hwnd = hwnd;
     }
 
+    fn window_corner_radius(&self) -> Option<f32> { Some(PANEL_RADIUS) }
+
     /// Right-aligned under the status icons.
     fn frame(&self) -> Option<RECT> {
         let width = (WIDTH * self.scale).round() as i32;
@@ -253,7 +274,7 @@ impl View for QuickSettingsView {
         let theme = cx.theme;
         if theme.backdrop == Backdrop::Solid
             && let Ok(brush) = cx.gfx.brush(theme.solid_fill) {
-                unsafe { cx.dc.FillRoundedRectangle(&rounded(rect(0.0, 0.0, cx.width, cx.height), DWM_CORNER_RADIUS * s), &brush) };
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(rect(0.0, 0.0, cx.width, cx.height), PANEL_RADIUS * s), &brush) };
             }
         let format = |family, size: f32, weight, align| text::format_px(&cx.gfx.dwrite, family, size * s, weight, align, false);
         let (Ok(bold), Ok(normal), Ok(small), Ok(right_aligned), Ok(icon), Ok(big_icon)) = (
@@ -276,7 +297,7 @@ impl View for QuickSettingsView {
         for &(hit, r) in &self.targets {
             match hit {
                 Hit::Network => {
-                    fill(r, 10.0 * s, plate_color(hit));
+                    fill(r, 16.0 * s, plate_color(hit));
                     let (glyph, title, detail) = match &self.status.network {
                         NetState::Wifi { ssid, signal } => (glyphs::WIFI, "Wi-Fi", format!("{ssid} · {signal}%")),
                         NetState::Wired => (glyphs::ETHERNET, "Ethernet", "Connected".to_owned()),
@@ -290,8 +311,13 @@ impl View for QuickSettingsView {
                     let mid = (r.top + r.bottom) / 2.0;
                     text::draw(cx, title, &bold, rect(text_left, r.top + 6.0 * s, r.right - 10.0 * s, mid), theme.text);
                     text::draw(cx, &detail, &normal, rect(text_left, mid, r.right - 30.0 * s, r.bottom - 6.0 * s), theme.text_dim);
-                    let chevron = if self.wifi.is_some() { "\u{E70E}" } else { "\u{E70D}" };
-                    text::draw(cx, chevron, &icon, rect(r.right - 30.0 * s, r.top, r.right - 6.0 * s, r.bottom), theme.text_dim);
+                    let chevron_rect = rect(r.right - 30.0 * s, r.top, r.right - 6.0 * s, r.bottom);
+                    let mut down = theme.text_dim;
+                    down.a *= 1.0 - self.wifi_progress;
+                    let mut up = theme.text_dim;
+                    up.a *= self.wifi_progress;
+                    text::draw(cx, glyphs::CHEVRON_DOWN, &icon, chevron_rect, down);
+                    text::draw(cx, glyphs::CHEVRON_UP, &icon, chevron_rect, up);
                 }
                 Hit::Wifi(_) => {}
                 Hit::Mute => {
@@ -342,17 +368,19 @@ impl View for QuickSettingsView {
                     let value = self.slider_value(hit);
                     let inset = 7.0 * s;
                     let mid = (r.top + r.bottom) / 2.0;
-                    let track = rect(r.left + inset, mid - 2.0 * s, r.right - inset, mid + 2.0 * s);
-                    fill(track, 2.0 * s, theme.control);
+                    let track = rect(r.left + inset, mid - 5.0 * s, r.right - inset, mid + 5.0 * s);
+                    fill(track, 5.0 * s, theme.control);
                     let knob_x = track.left + (track.right - track.left) * value;
-                    fill(rect(track.left, track.top, knob_x, track.bottom), 2.0 * s, theme.accent);
+                    if knob_x > track.left {
+                        fill(rect(track.left, track.top, knob_x, track.bottom), 5.0 * s, theme.accent);
+                    }
                     let knob = rect(knob_x - inset, mid - inset, knob_x + inset, mid + inset);
                     fill(knob, inset, theme.on_accent);
                     let percent = format!("{}%", (value * 100.0).round() as u32);
                     text::draw(cx, &percent, &right_aligned, rect(r.right, r.top, r.right + 40.0 * s, r.bottom), theme.text_dim);
                 }
                 Hit::Battery => {
-                    fill(r, 10.0 * s, plate_color(hit));
+                    fill(r, 14.0 * s, plate_color(hit));
                     if let Some(battery) = self.status.battery {
                         let state = match (battery.charging, battery.plugged) {
                             (true, _) => "Charging",
@@ -360,13 +388,27 @@ impl View for QuickSettingsView {
                             (false, false) => "On battery",
                         };
                         let pad = 12.0 * s;
-                        text::draw(cx, "Battery", &bold, rect(r.left + pad, r.top, r.right - pad, r.bottom), theme.text);
+                        let mid = (r.top + r.bottom) / 2.0;
+                        let body = rect(r.left + pad, mid - 5.0 * s, r.left + pad + 19.0 * s, mid + 5.0 * s);
+                        if let Ok(brush) = cx.gfx.brush(theme.text_dim) {
+                            unsafe {
+                                cx.dc.DrawRoundedRectangle(&rounded(body, 3.0 * s), &brush, s.max(1.0), None);
+                                cx.dc.FillRoundedRectangle(&rounded(rect(body.right + s, mid - 2.0 * s, body.right + 2.5 * s, mid + 2.0 * s), s), &brush);
+                            }
+                        }
+                        let inner = rect(body.left + 2.0 * s, body.top + 2.0 * s, body.right - 2.0 * s, body.bottom - 2.0 * s);
+                        let level = rect(inner.left, inner.top, inner.left + (inner.right - inner.left) * f32::from(battery.percent) / 100.0, inner.bottom);
+                        if battery.percent > 0 {
+                            fill(level, 2.0 * s, crate::ui::battery::level_color(battery, theme.text));
+                        }
+                        crate::ui::battery::mark(cx, body, battery, &icon);
+                        text::draw(cx, "Battery", &bold, rect(body.right + 9.0 * s, r.top, r.right - pad, r.bottom), theme.text);
                         let detail = format!("{}% · {state}", battery.percent);
                         text::draw(cx, &detail, &right_aligned, rect(r.left + pad, r.top, r.right - pad, r.bottom), theme.text_dim);
                     }
                 }
                 Hit::WdockSettings => {
-                    fill(r, 8.0 * s, plate_color(hit));
+                    fill(r, 12.0 * s, plate_color(hit));
                     text::draw(cx, glyphs::SETTINGS, &icon, rect(r.left + 8.0 * s, r.top, r.left + 34.0 * s, r.bottom), theme.text);
                     text::draw(cx, "wdock settings", &normal, rect(r.left + 34.0 * s, r.top, r.right - 8.0 * s, r.bottom), theme.text);
                 }
@@ -380,7 +422,9 @@ impl View for QuickSettingsView {
         }
 
         if let Some(wifi) = &self.wifi {
+            unsafe { cx.dc.PushAxisAlignedClip(&self.wifi_clip, windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED); }
             wifi.paint(cx, if let Some(Hit::Wifi(hit)) = self.hot { Some(hit) } else { None });
+            unsafe { cx.dc.PopAxisAlignedClip(); }
         }
 
         let info_top = self.targets.last().map_or(0.0, |(_, r)| r.bottom);
@@ -428,10 +472,10 @@ impl View for QuickSettingsView {
         }
         match self.hit(x, y) {
             Some(Hit::Network) => {
-                self.wifi = match self.wifi.take() {
-                    Some(_) => None,
-                    None => Some(WifiPanel::open(self.hwnd)),
-                };
+                self.wifi_open = !self.wifi_open;
+                if self.wifi_open && self.wifi.is_none() { self.wifi = Some(WifiPanel::open(self.hwnd)); }
+                unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); }
+                self.hot = None;
                 self.layout();
             }
             Some(Hit::Wifi(hit)) => {
@@ -486,7 +530,7 @@ impl View for QuickSettingsView {
 
     fn wheel(&mut self, x: f32, y: f32, delta: i16) -> bool {
         let step = if delta > 0 { 0.05 } else { -0.05 };
-        if let Some(wifi) = self.wifi.as_mut().filter(|w| w.contains(x, y)) {
+        if let Some(wifi) = self.wifi.as_mut().filter(|w| self.wifi_open && self.wifi_progress >= 1.0 && w.contains(x, y)) {
             let changed = wifi.wheel(delta);
             if changed {
                 self.layout();
@@ -505,6 +549,16 @@ impl View for QuickSettingsView {
     }
 
     fn timer(&mut self, id: usize) -> bool {
+        if id == TIMER_WIFI_ANIMATE {
+            let (next, done) = animate_wifi(self.wifi_progress, self.wifi_open);
+            self.wifi_progress = next;
+            if done {
+                unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE); }
+                if !self.wifi_open { self.wifi = None; }
+            }
+            self.layout();
+            return true;
+        }
         if id != TIMER_CONFIRM {
             return false;
         }
@@ -516,5 +570,27 @@ impl View for QuickSettingsView {
 
     fn deactivated(&mut self) -> bool {
         self.drag.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::animate_wifi;
+
+    #[test]
+    fn wifi_animation_converges_and_can_reverse() {
+        let (partial, done) = animate_wifi(0.0, true);
+        assert!(partial > 0.0 && partial < 1.0 && !done);
+        let (reversed, _) = animate_wifi(partial, false);
+        assert!(reversed < partial);
+        for open in [true, false] {
+            let mut progress = if open { 0.0 } else { 1.0 };
+            for _ in 0..100 {
+                let (next, finished) = animate_wifi(progress, open);
+                progress = next;
+                if finished { break; }
+            }
+            assert_eq!(progress, if open { 1.0 } else { 0.0 });
+        }
     }
 }

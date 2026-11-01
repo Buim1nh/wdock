@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "WDock Lyrics",
+  "version": "0.1.0",
+  "description": "Show lyrics for the song playing in WDock, including Spotify desktop and web.",
+  "host_permissions": [
+    "http://127.0.0.1:43179/*"
+  ],
+  "action": {
+    "default_title": "WDock Lyrics",
+    "default_popup": "popup.html"
+  }
+}

@@ -7,6 +7,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Imaging::IWICBitmapSource;
 
 use crate::model::tray_hidden::HiddenApp;
+use crate::platform::tray_preferences::Preference;
 use crate::platform::tray_proto::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_STATE, NIF_TIP, NIS_HIDDEN, NotifyIconData,
     TrayCommand, TrayMessage,
@@ -77,11 +78,13 @@ pub struct TrayModel {
     env: TrayEnv,
     /// Apps the user hid from the top bar (see `tray_hidden`).
     hidden: Vec<HiddenApp>,
+    shown: Vec<HiddenApp>,
+    windows_preferences: Vec<Preference>,
 }
 
 impl TrayModel {
     pub fn new(env: TrayEnv) -> Self {
-        Self { icons: Vec::new(), next_id: 1, revision: 0, env, hidden: Vec::new() }
+        Self { icons: Vec::new(), next_id: 1, revision: 0, env, hidden: Vec::new(), shown: Vec::new(), windows_preferences: Vec::new() }
     }
 
     /// Changes whenever anything visible about the tray changes.
@@ -212,20 +215,52 @@ impl TrayModel {
     /// hid and icons matching `overflow` (case-insensitive executable-name
     /// fragments) always go to the popup.
     pub fn split(&self, max_visible: usize, overflow: &[String]) -> (Vec<&TrayIcon>, Vec<&TrayIcon>) {
-        let (forced, mut bar): (Vec<&TrayIcon>, Vec<&TrayIcon>) = self
-            .icons
-            .iter()
-            .filter(|i| !i.hidden)
-            .partition(|i| {
-                self.hidden_by_user(i) || overflow.iter().any(|p| !p.is_empty() && i.exe.contains(&p.to_lowercase()))
-            });
-        let mut extra = if bar.len() > max_visible { bar.split_off(max_visible) } else { Vec::new() };
-        extra.extend(forced);
+        let visible: Vec<_> = self.icons.iter().filter(|i| !i.hidden).collect();
+        let explicit = |i: &TrayIcon| self.shown.iter().any(|h| h.matches(&i.exe, i.guid));
+        let preferred = |i: &TrayIcon| explicit(i) || self.windows_preference(i) == Some(true);
+        let forced = |i: &TrayIcon| self.hidden_by_user(i)
+            || (!explicit(i) && overflow.iter().any(|p| !p.is_empty() && i.exe.contains(&p.to_lowercase())));
+        let reserved = visible.iter().filter(|i| preferred(i) && !forced(i)).count();
+        let mut available = max_visible.saturating_sub(reserved);
+        let (mut bar, mut extra) = (Vec::new(), Vec::new());
+        for icon in visible {
+            if forced(icon) {
+                extra.push(icon);
+            } else if preferred(icon) {
+                bar.push(icon);
+            } else if available > 0 {
+                available -= 1;
+                bar.push(icon);
+            } else {
+                extra.push(icon);
+            }
+        }
         (bar, extra)
     }
 
+    /// Place an icon immediately before or after another icon.
+    pub fn move_icon(&mut self, id: u64, target: u64, after: bool) {
+        if id == target { return; }
+        let Some(from) = self.icons.iter().position(|icon| icon.id == id) else { return; };
+        if !self.icons.iter().any(|icon| icon.id == target) { return; }
+        let icon = self.icons.remove(from);
+        let index = self.icons.iter().position(|icon| icon.id == target).unwrap();
+        self.icons.insert(index + usize::from(after), icon);
+        self.revision += 1;
+    }
+
     pub fn hidden_by_user(&self, icon: &TrayIcon) -> bool {
-        self.hidden.iter().any(|h| h.matches(&icon.exe, icon.guid))
+        if self.hidden.iter().any(|h| h.matches(&icon.exe, icon.guid)) { return true; }
+        if self.shown.iter().any(|h| h.matches(&icon.exe, icon.guid)) { return false; }
+        self.windows_preference(icon) == Some(false)
+    }
+
+    fn windows_preference(&self, icon: &TrayIcon) -> Option<bool> {
+        let mut matches = self.windows_preferences.iter().filter(|p| p.matches(&icon.exe, icon.guid, icon.uid));
+        let first = matches.next()?;
+        // Stale, conflicting Explorer entries are ambiguous; leave the icon visible.
+        if matches.any(|p| p.promoted != first.promoted) { return None; }
+        Some(first.promoted)
     }
 
     /// Replaces the list of user-hidden apps (loaded at start).
@@ -234,18 +269,32 @@ impl TrayModel {
         self.revision += 1;
     }
 
+    pub fn set_shown(&mut self, apps: Vec<HiddenApp>) {
+        self.shown = apps;
+        self.revision += 1;
+    }
+
+    pub fn set_windows_preferences(&mut self, prefs: Vec<Preference>) {
+        if self.windows_preferences != prefs {
+            self.windows_preferences = prefs;
+            self.revision += 1;
+        }
+    }
+
     /// Moves an icon between the bar and the overflow popup. Returns the new
     /// list to persist, or `None` for an unknown icon.
-    pub fn toggle_hidden(&mut self, id: u64) -> Option<Vec<HiddenApp>> {
+    pub fn set_icon_hidden(&mut self, id: u64, hidden: bool) -> Option<(Vec<HiddenApp>, Vec<HiddenApp>)> {
         let icon = self.icon(id)?;
         let (exe, guid) = (icon.exe.clone(), icon.guid);
-        if self.hidden_by_user(icon) {
-            self.hidden.retain(|h| !h.matches(&exe, guid));
-        } else {
+        self.hidden.retain(|h| !h.matches(&exe, guid));
+        self.shown.retain(|h| !h.matches(&exe, guid));
+        if hidden {
             self.hidden.push(HiddenApp::for_icon(&exe, guid));
+        } else {
+            self.shown.push(HiddenApp::for_icon(&exe, guid));
         }
         self.revision += 1;
-        Some(self.hidden.clone())
+        Some((self.hidden.clone(), self.shown.clone()))
     }
 
     pub fn set_screen_rect(&mut self, id: u64, rect: Option<RECT>) {
@@ -352,7 +401,39 @@ mod tests {
         let (bar, extra) = tray.split(2, &["APP2".into()]);
         let exes = |v: &[&TrayIcon]| v.iter().map(|i| i.exe.clone()).collect::<Vec<_>>();
         assert_eq!(exes(&bar), ["app1.exe", "app3.exe"]);
-        assert_eq!(exes(&extra), ["app4.exe", "app2.exe"]);
+        assert_eq!(exes(&extra), ["app2.exe", "app4.exe"]);
+    }
+
+    #[test]
+    fn moving_icons_controls_their_display_order() {
+        let mut tray = TrayModel::new(env());
+        for hwnd in 1..=3 { tray.apply(msg(TrayCommand::Add, hwnd, 1, 0)); }
+        let first = tray.find_by(1, 1, None).unwrap().id;
+        let third = tray.find_by(3, 1, None).unwrap().id;
+        tray.move_icon(third, first, false);
+        let (bar, _) = tray.split(3, &[]);
+        assert_eq!(bar.iter().map(|icon| icon.id).collect::<Vec<_>>()[0], third);
+        tray.move_icon(third, first, true);
+        let (bar, _) = tray.split(3, &[]);
+        assert_eq!(bar.iter().map(|icon| icon.id).collect::<Vec<_>>()[1], third);
+    }
+
+    #[test]
+    fn windows_settings_and_explicit_overrides_split_icons() {
+        let mut tray = TrayModel::new(env());
+        tray.apply(msg(TrayCommand::Add, 1, 7, 0));
+        tray.apply(msg(TrayCommand::Add, 2, 8, 0));
+        tray.set_windows_preferences(vec![
+            Preference { exe: "app1.exe".into(), guid: None, uid: Some(7), promoted: false },
+            Preference { exe: "app2.exe".into(), guid: None, uid: Some(8), promoted: true },
+        ]);
+        let id = tray.find_by(1, 7, None).unwrap().id;
+        assert_eq!(tray.split(1, &[]).0[0].exe, "app2.exe");
+        assert_eq!(tray.split(1, &[]).1[0].exe, "app1.exe");
+        tray.set_icon_hidden(id, false);
+        assert_eq!(tray.split(1, &[]).0.len(), 2, "explicitly shown icons are not lost to the limit");
+        tray.set_icon_hidden(id, true);
+        assert_eq!(tray.split(1, &[]).1[0].exe, "app1.exe");
     }
 
     #[test]

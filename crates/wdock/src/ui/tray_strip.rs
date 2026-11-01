@@ -3,23 +3,85 @@
 //! like explorer's notification area does.
 
 use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
 
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::{D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, ID2D1Bitmap1};
-use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
+use windows::Win32::Graphics::Gdi::InvalidateRect;
+use windows::Win32::UI::WindowsAndMessaging::{IsWindow, KillTimer, SetTimer};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 
 use crate::model::tray::TrayModel;
-use crate::model::tray_hidden::{self, exe_name};
+use crate::model::tray_hidden;
 use crate::platform::tray_host::{self, TrayInput, with_tray};
 use crate::ui::bar::{self, Button, PaintCx};
 use crate::ui::gfx::{rect, rounded};
 use crate::ui::popup;
-use crate::ui::popups::menu::MenuItem;
 
 pub const TIMER_TIP: usize = 50;
 const TIP_DELAY_MS: u32 = 450;
+const DRAG_THRESHOLD: f32 = 5.0;
 pub const ICON_DIP: f32 = 16.0;
+
+thread_local! {
+    static DROP_TARGETS: Cell<Option<(RECT, RECT)>> = const { Cell::new(None) };
+    static SURFACES: RefCell<[Option<Surface>; 2]> = const { RefCell::new([None, None]) };
+    static MARKER: Cell<Option<Marker>> = const { Cell::new(None) };
+}
+
+struct Surface { hwnd: HWND, bounds: RECT, slots: Vec<(u64, RECT)> }
+#[derive(Clone, Copy, PartialEq)]
+struct Marker { hwnd: HWND, rect: RECT, target: Option<u64>, after: bool, overflow: bool }
+
+fn repaint(hwnd: HWND) { let _ = unsafe { InvalidateRect(Some(hwnd), None, false) }; }
+
+fn set_marker(marker: Option<Marker>) {
+    let old = MARKER.replace(marker);
+    if old == marker { return; }
+    if let Some(old) = old { repaint(old.hwnd); }
+    if let Some(marker) = marker { repaint(marker.hwnd); }
+}
+
+fn marker_at(x: i32, y: i32) -> Option<Marker> {
+    SURFACES.with_borrow(|surfaces| {
+        // The popup overlaps screen space near the bar, so prefer it.
+        for overflow in [true, false] {
+            let Some(surface) = &surfaces[usize::from(overflow)] else { continue; };
+            if !unsafe { IsWindow(Some(surface.hwnd)).as_bool() } { continue; }
+            if !inside(surface.bounds, x, y) { continue; }
+            let nearest = surface.slots.iter().min_by_key(|(_, r)| {
+                let dy = if y < r.top { r.top - y } else if y >= r.bottom { y - r.bottom + 1 } else { 0 };
+                let dx = if x < r.left { r.left - x } else if x >= r.right { x - r.right + 1 } else { 0 };
+                dy * 10000 + dx
+            });
+            if let Some(&(target, slot)) = nearest {
+                // On the bar, ignore areas away from the tray icons.
+                if !overflow && (x < slot.left - 12 || x > slot.right + 12) { continue; }
+                let after = x >= (slot.left + slot.right) / 2;
+                let line = if after { slot.right } else { slot.left };
+                return Some(Marker { hwnd: surface.hwnd, rect: RECT { left: line - 1, right: line + 1, top: slot.top + 4, bottom: slot.bottom - 4 }, target: Some(target), after, overflow });
+            } else if overflow {
+                let line = surface.bounds.left + 8;
+                return Some(Marker { hwnd: surface.hwnd, rect: RECT { left: line, right: line + 2, top: surface.bounds.top + 8, bottom: surface.bounds.bottom - 8 }, target: None, after: false, overflow });
+            }
+        }
+        None
+    })
+}
+
+fn in_overflow_surface(x: i32, y: i32) -> bool {
+    SURFACES.with_borrow(|surfaces| surfaces[1].as_ref().is_some_and(|surface|
+        unsafe { IsWindow(Some(surface.hwnd)).as_bool() } && inside(surface.bounds, x, y)))
+}
+
+pub fn set_drop_targets(bar: RECT, chevron: RECT) {
+    DROP_TARGETS.set(Some((bar, chevron)));
+}
+
+fn inside(rect: RECT, x: i32, y: i32) -> bool {
+    x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+}
 
 #[derive(Default)]
 pub struct TrayStrip {
@@ -31,10 +93,16 @@ pub struct TrayStrip {
     /// What the hover produced: our tooltip, or NIN_POPUPOPEN to the app.
     tip_open: Option<u64>,
     pressed: Option<(u64, Button)>,
+    drag_origin: Option<(f32, f32)>,
+    dragging: bool,
+    in_overflow: bool,
     bitmaps: HashMap<String, ID2D1Bitmap1>,
 }
 
 impl TrayStrip {
+    pub fn set_overflow(&mut self, in_overflow: bool) {
+        self.in_overflow = in_overflow;
+    }
     pub fn attach(&mut self, hwnd: HWND, scale: f32) {
         self.hwnd = hwnd;
         self.scale = scale;
@@ -49,9 +117,9 @@ impl TrayStrip {
     }
 
     pub fn paint(&mut self, cx: &PaintCx, tray: &TrayModel) {
-        let size = ICON_DIP * cx.scale;
         let mut live = Vec::with_capacity(self.slots.len());
         for &(id, slot) in &self.slots {
+            let size = (ICON_DIP * cx.scale).min((slot.bottom - slot.top).max(0.0));
             let Some(icon) = tray.icon(id) else {
                 continue;
             };
@@ -69,7 +137,7 @@ impl TrayStrip {
                 }
             if let Some(bitmap) = self.bitmaps.get(&key) {
                 let cx_mid = ((slot.left + slot.right) / 2.0).round();
-                let cy_mid = ((slot.top + slot.bottom) / 2.0).round();
+                let cy_mid = (slot.top + slot.bottom) / 2.0;
                 let dest = rect(cx_mid - size / 2.0, cy_mid - size / 2.0, cx_mid + size / 2.0, cy_mid + size / 2.0);
                 unsafe {
                     cx.dc.DrawBitmap(bitmap, Some(&dest), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
@@ -78,11 +146,23 @@ impl TrayStrip {
             live.push(key);
         }
         self.bitmaps.retain(|key, _| live.contains(key));
+        if let Some(marker) = MARKER.get().filter(|marker| marker.hwnd == self.hwnd) {
+            let origin = bar::screen_rect(self.hwnd);
+            let r = marker.rect;
+            if let Ok(brush) = cx.gfx.brush(cx.theme.accent) {
+                let line = rect((r.left-origin.left) as f32, (r.top-origin.top) as f32, (r.right-origin.left) as f32, (r.bottom-origin.top) as f32);
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(line, cx.scale), &brush) };
+            }
+        }
     }
 
     /// Records where icons were drawn, for Shell_NotifyIconGetRect.
     pub fn publish_rects(&self) {
         let origin = bar::screen_rect(self.hwnd);
+        SURFACES.with_borrow_mut(|surfaces| surfaces[usize::from(self.in_overflow)] = Some(Surface {
+            hwnd: self.hwnd, bounds: origin,
+            slots: self.slots.iter().map(|&(id, slot)| (id, to_screen(origin, slot))).collect(),
+        }));
         with_tray(|tray| {
             for &(id, slot) in &self.slots {
                 tray.set_screen_rect(id, Some(to_screen(origin, slot)));
@@ -119,6 +199,21 @@ impl TrayStrip {
     }
 
     pub fn mouse_move(&mut self, x: f32, y: f32) -> bool {
+        if let Some((sx, sy)) = self.drag_origin {
+            if (x - sx).abs() > DRAG_THRESHOLD * self.scale || (y - sy).abs() > DRAG_THRESHOLD * self.scale {
+                self.dragging = true;
+                self.close_tip();
+            }
+            if self.dragging {
+                let origin = bar::screen_rect(self.hwnd);
+                let (sx, sy) = (origin.left + x.round() as i32, origin.top + y.round() as i32);
+                if !self.in_overflow
+                    && let Some((_, chevron)) = DROP_TARGETS.get()
+                        && inside(chevron, sx, sy) { popup::open_overflow_for_drag(chevron, self.scale); }
+                set_marker(marker_at(sx, sy));
+                return true;
+            }
+        }
         let hover = self.hit(x, y);
         if let Some(id) = hover {
             tray_host::send(id, TrayInput::MouseMove, self.anchor(id));
@@ -136,7 +231,7 @@ impl TrayStrip {
 
     pub fn mouse_leave(&mut self) -> bool {
         self.close_tip();
-        self.pressed = None;
+        if self.drag_origin.is_none() { self.pressed = None; }
         self.hover.take().is_some()
     }
 
@@ -146,8 +241,13 @@ impl TrayStrip {
         };
         self.close_tip();
         self.pressed = Some((id, button));
-        let input = if button == Button::Left { TrayInput::LeftDown } else { TrayInput::RightDown };
-        tray_host::send(id, input, self.anchor(id));
+        if button == Button::Left {
+            self.drag_origin = Some((x, y));
+            self.dragging = false;
+            unsafe { SetCapture(self.hwnd); }
+        } else {
+            tray_host::send(id, TrayInput::RightDown, self.anchor(id));
+        }
         true
     }
 
@@ -155,35 +255,44 @@ impl TrayStrip {
         let Some((id, pressed_button)) = self.pressed.take() else {
             return false;
         };
+        let ordinary_click = self.drag_origin.is_some();
+        if pressed_button == Button::Left {
+            self.drag_origin = None;
+            let _ = unsafe { ReleaseCapture() };
+            if std::mem::take(&mut self.dragging) {
+                let origin = bar::screen_rect(self.hwnd);
+                let (sx, sy) = (origin.left + x.round() as i32, origin.top + y.round() as i32);
+                let marker = MARKER.get();
+                set_marker(None);
+                if let Some(marker) = marker {
+                    set_on_top_bar(id, !marker.overflow);
+                    if let Some(target) = marker.target {
+                        with_tray(|tray| tray.move_icon(id, target, marker.after));
+                    }
+                    crate::app::notify_model();
+                } else if in_overflow_surface(sx, sy) {
+                    set_on_top_bar(id, false);
+                } else if let Some((bar, chevron)) = DROP_TARGETS.get() {
+                    if inside(chevron, sx, sy) {
+                        set_on_top_bar(id, false);
+                    } else if self.in_overflow && inside(bar, sx, sy) {
+                        set_on_top_bar(id, true);
+                    }
+                }
+                return true;
+            }
+        }
         if pressed_button == button && self.hit(x, y) == Some(id) {
             if button == Button::Left {
+                if ordinary_click {
+                    tray_host::send(id, TrayInput::LeftDown, self.anchor(id));
+                }
                 tray_host::send(id, TrayInput::LeftUp, self.anchor(id));
             } else {
-                self.show_menu(id);
+                tray_host::send(id, TrayInput::RightUp, self.anchor(id));
             }
         }
         true
-    }
-
-    /// Right-click: wdock's menu for the icon. Its last item hands the click on
-    /// to the app, which then shows its own menu.
-    fn show_menu(&self, id: u64) {
-        let Some(Some((name, hidden))) = with_tray(|tray| {
-            tray.icon(id).map(|icon| {
-                let name = if icon.tip.is_empty() { exe_name(&icon.exe).to_owned() } else { icon.tip.clone() };
-                (name, tray.hidden_by_user(icon))
-            })
-        }) else {
-            return;
-        };
-        let anchor = self.anchor(id);
-        let toggle = if hidden { "Show on top bar" } else { "Hide from top bar" };
-        let items = vec![
-            MenuItem::Header(name),
-            MenuItem::action(toggle, move || toggle_on_top_bar(id)),
-            MenuItem::action("Open the app's menu", move || tray_host::send(id, TrayInput::RightUp, anchor)),
-        ];
-        popup::show_menu(items, anchor, self.scale);
     }
 
     pub fn double_click(&mut self, x: f32, y: f32, button: Button) -> bool {
@@ -225,9 +334,10 @@ impl TrayStrip {
 }
 
 /// Puts an icon on the top bar or back there, and remembers the choice.
-fn toggle_on_top_bar(id: u64) {
-    if let Some(Some(apps)) = with_tray(|tray| tray.toggle_hidden(id)) {
-        tray_hidden::save(&apps);
+fn set_on_top_bar(id: u64, show: bool) {
+    if let Some(Some((hidden, shown))) = with_tray(|tray| tray.set_icon_hidden(id, !show)) {
+        tray_hidden::save(&hidden);
+        tray_hidden::save_shown(&shown);
     }
     crate::app::notify_model();
 }
