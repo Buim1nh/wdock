@@ -208,7 +208,7 @@ impl View for PreviewView {
 
     fn model_changed(&mut self) -> bool {
         let model = self.model.borrow();
-        let keep: Vec<bool> = self.windows.iter().map(|&h| model.placement(h).is_some()).collect();
+        let keep: Vec<bool> = self.windows.iter().map(|&h| model.contains(h)).collect();
         drop(model);
         if keep.iter().all(|&k| k) {
             return true; // titles may have changed

@@ -1,10 +1,8 @@
 //! The set of app windows, kept current from WinEvent notifications, and the
 //! dock entries derived from it (pinned apps first, then other running apps).
 //!
-//! Each monitor has its own set of workspaces. Windows of inactive workspaces
-//! are hidden with `SW_HIDE` (no injection, works for every app); their handles
-//! are written to `hidden.txt` so a crash never leaves them stranded: the next
-//! start (or the guard) shows them again.
+//! Workspaces are Windows' own virtual desktops: windows on other desktops are
+//! cloaked by the shell and therefore not tracked here.
 
 use std::collections::HashMap;
 use std::fs;
@@ -28,8 +26,6 @@ pub struct TrackedWindow {
     pub monitor: HMONITOR,
     pub last_active: u64,
     pub flashing: bool,
-    /// 0-based workspace on `monitor`.
-    pub workspace: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,32 +60,16 @@ pub struct WindowModel {
     clock: u64,
     wic: Option<IWICImagingFactory>,
     icon_px: u32,
-    workspaces: u8,
-    /// Active workspace per monitor handle; absent means the first.
-    active: HashMap<isize, u8>,
-    /// Windows we hid for workspaces, with the tick they were hidden at.
-    hidden: HashMap<isize, u64>,
     /// Bumped whenever the pinned list changes, since entries refer to it by index.
     pins_revision: u64,
-}
-
-/// Visibility events for a window we just hid can still report it visible
-/// while `ShowWindowAsync` is in flight; within this window they are ignored.
-const HIDE_GRACE_MS: u64 = 1500;
-
-fn mon(monitor: HMONITOR) -> isize {
-    monitor.0 as isize
-}
-
-fn now_ms() -> u64 {
-    unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }
 }
 
 fn hidden_path() -> PathBuf {
     crate::paths::local_dir().join("hidden.txt")
 }
 
-/// Shows windows a previous run hid for workspaces and did not restore.
+/// Shows windows that versions before 0.4, which hid windows for their own
+/// workspaces, left hidden after a crash or upgrade.
 pub fn restore_orphans() {
     let path = hidden_path();
     let Ok(text) = fs::read_to_string(&path) else {
@@ -112,7 +92,7 @@ pub fn restore_orphans() {
 }
 
 impl WindowModel {
-    pub fn new(pinned_targets: &[String], icon_px: u32, workspaces: u8) -> Self {
+    pub fn new(pinned_targets: &[String], icon_px: u32) -> Self {
         let wic: Option<IWICImagingFactory> =
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
                 .inspect_err(|err| log::error!("WIC unavailable, icons disabled: {err}"))
@@ -124,7 +104,6 @@ impl WindowModel {
         let mut model = Self::empty(pinned);
         model.wic = wic;
         model.icon_px = icon_px;
-        model.workspaces = workspaces.clamp(1, 9);
         model
     }
 
@@ -137,9 +116,6 @@ impl WindowModel {
             clock: 0,
             wic: None,
             icon_px: 0,
-            workspaces: 1,
-            active: HashMap::new(),
-            hidden: HashMap::new(),
             pins_revision: 0,
         }
     }
@@ -207,52 +183,21 @@ impl WindowModel {
 
     /// Re-evaluates one window: starts or stops tracking it, or notes a monitor change.
     fn refresh(&mut self, hwnd: HWND) -> bool {
-        let mut changed = false;
-        if let Some(&hidden_at) = self.hidden.get(&(hwnd.0 as isize)) {
-            if !wininfo::exists(hwnd) {
-                return self.remove(hwnd);
-            }
-            if !wininfo::is_visible(hwnd) || now_ms() < hidden_at + HIDE_GRACE_MS {
-                return false;
-            }
-            // Shown by someone else, usually the app itself: it joins the
-            // workspace now visible on its monitor.
-            self.hidden.remove(&(hwnd.0 as isize));
-            self.save_hidden();
-            if let Some(i) = self.index(hwnd) {
-                let monitor = wininfo::monitor(hwnd);
-                self.windows[i].monitor = monitor;
-                self.windows[i].workspace = self.active_workspace(monitor);
-            }
-            changed = true;
-        }
         let wanted = wininfo::is_app_window(hwnd);
         match (self.index(hwnd), wanted) {
             (Some(i), true) => {
                 let monitor = wininfo::monitor(hwnd);
-                if std::mem::replace(&mut self.windows[i].monitor, monitor) == monitor {
-                    return changed;
-                }
-                // Dragged to another monitor: it lands on that monitor's current workspace.
-                self.windows[i].workspace = self.active_workspace(monitor);
-                true
+                std::mem::replace(&mut self.windows[i].monitor, monitor) != monitor
             }
             (Some(_), false) => self.remove(hwnd),
             (None, true) => {
                 let identity = Identity::of_window(hwnd);
                 log::debug!("track {:?} \"{}\" {:?}", hwnd.0, wininfo::title(hwnd), identity);
                 let monitor = wininfo::monitor(hwnd);
-                self.insert(TrackedWindow {
-                    hwnd,
-                    identity,
-                    monitor,
-                    last_active: 0,
-                    flashing: false,
-                    workspace: self.active_workspace(monitor),
-                });
+                self.insert(TrackedWindow { hwnd, identity, monitor, last_active: 0, flashing: false });
                 true
             }
-            (None, false) => changed,
+            (None, false) => false,
         }
     }
 
@@ -272,9 +217,6 @@ impl WindowModel {
             return false;
         };
         let window = self.windows.remove(i);
-        if self.hidden.remove(&(hwnd.0 as isize)).is_some() {
-            self.save_hidden();
-        }
         let key = window.identity.key();
         if !self.windows.iter().any(|w| w.identity.key() == key) {
             // Forget it so it reappears at the end next time, like macOS.
@@ -401,14 +343,8 @@ impl WindowModel {
                 self.focus(entry.windows[(i + 1) % entry.windows.len()]);
             }
             None => {
-                // Prefer a window on a workspace that is already showing.
-                let visible = entry
-                    .windows
-                    .iter()
-                    .copied()
-                    .filter(|h| !self.is_hidden(*h))
-                    .max_by_key(|h| self.last_active(*h));
-                self.focus(visible.or(entry.recent).unwrap_or(first));
+                let recent = entry.windows.iter().copied().max_by_key(|h| self.last_active(*h));
+                self.focus(recent.or(entry.recent).unwrap_or(first));
             }
         }
     }
@@ -417,141 +353,19 @@ impl WindowModel {
         self.windows.iter().find(|w| w.hwnd == hwnd).map_or(0, |w| w.last_active)
     }
 
-    /// Brings a window forward, first switching to its workspace if hidden.
     pub fn focus(&mut self, hwnd: HWND) {
-        let Some(window) = self.windows.iter().find(|w| w.hwnd == hwnd) else {
-            wininfo::activate(hwnd);
-            return;
-        };
-        if self.is_hidden(hwnd) {
-            let (monitor, workspace) = (window.monitor, window.workspace);
-            self.switch_workspace(monitor, workspace);
-            // The show is asynchronous; activate once the window is visible.
-            crate::app::focus_later(hwnd);
-            crate::app::notify_model();
-        } else {
-            wininfo::activate(hwnd);
-        }
+        wininfo::activate(hwnd);
     }
 
-    // ---- workspaces ----
-
-    pub fn active_workspace(&self, monitor: HMONITOR) -> u8 {
-        self.active.get(&mon(monitor)).copied().unwrap_or(0).min(self.workspaces - 1)
+    pub fn contains(&self, hwnd: HWND) -> bool {
+        self.windows.iter().any(|w| w.hwnd == hwnd)
     }
 
-    pub fn is_hidden(&self, hwnd: HWND) -> bool {
-        self.hidden.contains_key(&(hwnd.0 as isize))
-    }
-
-    /// Monitor and workspace of a tracked window.
-    pub fn placement(&self, hwnd: HWND) -> Option<(HMONITOR, u8)> {
-        self.windows.iter().find(|w| w.hwnd == hwnd).map(|w| (w.monitor, w.workspace))
-    }
-
-    /// Window count per workspace on `monitor`.
-    #[cfg(test)]
-    pub fn occupancy(&self, monitor: HMONITOR) -> Vec<usize> {
-        let mut counts = vec![0; self.workspaces as usize];
-        for w in self.windows.iter().filter(|w| w.monitor == monitor) {
-            if let Some(count) = counts.get_mut(w.workspace as usize) {
-                *count += 1;
-            }
-        }
-        counts
-    }
-
-    /// Windows of one workspace, most recently active first.
-    pub fn workspace_windows(&self, monitor: HMONITOR, workspace: u8) -> Vec<HWND> {
-        let mut windows: Vec<&TrackedWindow> =
-            self.windows.iter().filter(|w| w.monitor == monitor && w.workspace == workspace).collect();
+    /// Windows on `monitor`, most recently active first.
+    pub fn monitor_windows(&self, monitor: HMONITOR) -> Vec<HWND> {
+        let mut windows: Vec<&TrackedWindow> = self.windows.iter().filter(|w| w.monitor == monitor).collect();
         windows.sort_by_key(|w| std::cmp::Reverse(w.last_active));
         windows.into_iter().map(|w| w.hwnd).collect()
-    }
-
-    /// Shows `workspace` on `monitor`, hiding the one shown before. Full-screen
-    /// windows (games) are never hidden; they follow to the new workspace.
-    /// Returns the window that should receive focus.
-    pub fn switch_workspace(&mut self, monitor: HMONITOR, workspace: u8) -> Option<HWND> {
-        let workspace = workspace.min(self.workspaces - 1);
-        let current = self.active_workspace(monitor);
-        if current == workspace {
-            return None;
-        }
-        log::debug!("monitor {:?}: workspace {} -> {}", monitor.0, current + 1, workspace + 1);
-        self.active.insert(mon(monitor), workspace);
-        let now = now_ms();
-        let mut focus: Option<(u64, HWND)> = None;
-        for w in self.windows.iter_mut().filter(|w| w.monitor == monitor) {
-            let id = w.hwnd.0 as isize;
-            if w.workspace == current && !self.hidden.contains_key(&id) {
-                if wininfo::is_fullscreen(w.hwnd) {
-                    w.workspace = workspace;
-                } else {
-                    self.hidden.insert(id, now);
-                    wininfo::hide(w.hwnd);
-                }
-            } else if w.workspace == workspace && self.hidden.remove(&id).is_some() {
-                wininfo::show(w.hwnd);
-            }
-            let newer = focus.is_none_or(|(t, _)| w.last_active > t);
-            if w.workspace == workspace && !wininfo::is_minimized(w.hwnd) && newer {
-                focus = Some((w.last_active, w.hwnd));
-            }
-        }
-        self.save_hidden();
-        focus.map(|(_, hwnd)| hwnd)
-    }
-
-    /// Moves a window to another workspace of its monitor, hiding it if that
-    /// workspace is not the one showing.
-    #[cfg(test)]
-    pub fn move_window(&mut self, hwnd: HWND, workspace: u8) -> bool {
-        let workspace = workspace.min(self.workspaces - 1);
-        let Some(i) = self.index(hwnd) else {
-            return false;
-        };
-        if self.windows[i].workspace == workspace {
-            return false;
-        }
-        self.windows[i].workspace = workspace;
-        let id = hwnd.0 as isize;
-        if workspace == self.active_workspace(self.windows[i].monitor) {
-            if self.hidden.remove(&id).is_some() {
-                wininfo::show(hwnd);
-            }
-        } else if let std::collections::hash_map::Entry::Vacant(slot) = self.hidden.entry(id) {
-            slot.insert(now_ms());
-            wininfo::hide(hwnd);
-        }
-        self.save_hidden();
-        true
-    }
-
-    /// Shows every window hidden for workspaces (shutdown).
-    pub fn show_all_hidden(&mut self) {
-        for &id in self.hidden.keys() {
-            wininfo::show(HWND(id as *mut _));
-        }
-        self.hidden.clear();
-        self.active.clear();
-        let _ = fs::remove_file(hidden_path());
-    }
-
-    fn save_hidden(&self) {
-        if cfg!(test) {
-            return;
-        }
-        let path = hidden_path();
-        if self.hidden.is_empty() {
-            let _ = fs::remove_file(&path);
-            return;
-        }
-        let text: String = self.hidden.keys().map(|id| format!("{id}\n")).collect();
-        let written = path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::write(&path, text));
-        if let Err(err) = written {
-            log::warn!("could not record hidden windows: {err}");
-        }
     }
 
     // ---- per-window lookups (switcher, overview, previews) ----
@@ -680,7 +494,6 @@ mod tests {
                 monitor: HMONITOR::default(),
                 last_active: *last_active,
                 flashing: false,
-                workspace: 0,
             });
         }
         model
@@ -727,46 +540,14 @@ mod tests {
         assert!(entries[1].active);
     }
 
-    fn workspace_model() -> WindowModel {
-        let mut model = model_with(
-            vec![],
-            &[(1, identity(None, "a.exe"), 1), (2, identity(None, "b.exe"), 2), (3, identity(None, "c.exe"), 3)],
-        );
-        model.workspaces = 3;
-        model
-    }
-
     #[test]
-    fn switching_hides_the_old_workspace_and_shows_the_new() {
-        let mut model = workspace_model();
-        let m = HMONITOR::default();
-        model.windows[2].workspace = 1;
-        assert_eq!(model.occupancy(m), vec![2, 1, 0]);
-
-        let focus = model.switch_workspace(m, 1);
-        assert_eq!(focus, Some(hwnd(3)));
-        assert_eq!(model.active_workspace(m), 1);
-        assert!(model.is_hidden(hwnd(1)) && model.is_hidden(hwnd(2)) && !model.is_hidden(hwnd(3)));
-
-        model.switch_workspace(m, 0);
-        assert!(!model.is_hidden(hwnd(1)) && model.is_hidden(hwnd(3)));
-        assert_eq!(model.switch_workspace(m, 0), None, "already showing");
-    }
-
-    #[test]
-    fn moving_a_window_hides_it_until_its_workspace_shows() {
-        let mut model = workspace_model();
-        let m = HMONITOR::default();
-        assert!(model.move_window(hwnd(1), 2));
-        assert!(model.is_hidden(hwnd(1)));
-        assert!(!model.move_window(hwnd(1), 2), "no-op");
-        assert_eq!(model.workspace_windows(m, 2), vec![hwnd(1)]);
-        model.switch_workspace(m, 2);
-        assert!(!model.is_hidden(hwnd(1)));
-        assert!(model.move_window(hwnd(2), 2), "hidden window joins the shown workspace");
-        assert!(!model.is_hidden(hwnd(2)));
-        model.show_all_hidden();
-        assert!(model.hidden.is_empty());
+    fn monitor_windows_are_most_recent_first() {
+        let mut model = model_with(vec![], &[(1, identity(None, "a.exe"), 1), (2, identity(None, "b.exe"), 3)]);
+        model.windows.push(TrackedWindow {
+            hwnd: hwnd(3), identity: identity(None, "c.exe"), monitor: HMONITOR(7 as *mut _), last_active: 9, flashing: false,
+        });
+        assert_eq!(model.monitor_windows(HMONITOR::default()), vec![hwnd(2), hwnd(1)]);
+        assert!(model.contains(hwnd(3)) && !model.contains(hwnd(4)));
     }
 
     #[test]

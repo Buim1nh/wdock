@@ -222,7 +222,6 @@ File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động 
 | `[topbar]` | `height` (30), `monitors` (`"all"` hoặc `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible`: số icon trước nút tràn (12); `overflow`: các tên file chạy luôn bị đưa vào phần tràn |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` hoặc `"glass"`), `hover_size` tùy chọn, `magnification` cũ (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
-| `[workspaces]` | Thiết lập cũ; số desktop được lấy từ Windows. |
 | `[island]` | `enabled`, `file_shelf`, `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
 
 Khi chưa có danh sách ghim riêng, wdock nhập các app từ taskbar Windows theo thứ tự và sao chép shortcut vào thư mục dữ liệu của mình. Các thay đổi sau đó chỉ lưu vào `%LOCALAPPDATA%\wdock\pinned.txt`, không sửa taskbar Windows. Nếu nhập thất bại, wdock tạm dùng danh sách trong cấu hình và thử lại lần khởi động sau. Giao diện Windows dùng để nhập chưa được Microsoft công bố.
@@ -235,7 +234,6 @@ Dữ liệu và log nằm trong `%LOCALAPPDATA%\wdock\`:
 |---|---|
 | `logs\wdock.log`, `logs\wdock-guard.log` | log (xoay vòng khi vượt 2 MB) |
 | `pinned.txt` | app ghim, theo thứ tự trên dock |
-| `hidden.txt` | cửa sổ đang ở workspace khác |
 | `taskbar.txt` | trạng thái auto-hide gốc của explorer |
 | `tray-hidden.txt`, `tray-shown.txt` | lựa chọn vị trí icon khay trong wdock |
 
@@ -259,7 +257,7 @@ Script này:
 
 1. Gỡ scheduled task (và mục `Run` của các bản cài cũ).
 2. Dừng guard rồi dừng shell.
-3. Trả lại taskbar của explorer và các cửa sổ đang ẩn ở workspace khác.
+3. Trả lại taskbar của explorer (và các cửa sổ mà bản cũ còn để ẩn).
 
 `-RemoveFiles` xóa luôn file chạy, `-RemoveData` xóa log, cache và trạng thái. File cấu hình luôn được giữ lại.
 
@@ -289,7 +287,7 @@ Mã nguồn nằm trong `crates/wdock/src`:
 | `ui/` | các thanh Direct2D, dock, island, popup, lớp composition |
 | `platform/` | lớp bọc Win32, tray host, AppBar, sự kiện cửa sổ |
 | `services/` | âm thanh, mạng và Wi-Fi, nguồn, độ sáng, phiên media, chỉ mục app, icon |
-| `model/` | cấu hình, cửa sổ và workspace, khay, tìm kiếm, Pomodoro |
+| `model/` | cấu hình, cửa sổ, khay, tìm kiếm, Pomodoro |
 
 ## Kết quả đo
 

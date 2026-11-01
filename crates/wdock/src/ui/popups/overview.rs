@@ -86,7 +86,7 @@ impl OverviewView {
         let model = self.model.borrow();
         let state = crate::platform::virtual_desktops::state();
         self.workspace = state.as_ref().map_or(0, |s| s.current);
-        let windows = model.workspace_windows(self.monitor.handle, 0);
+        let windows = model.monitor_windows(self.monitor.handle);
         self.occupancy = vec![0; state.map_or(1, |s| s.count as usize)];
         if let Some(count) = self.occupancy.get_mut(self.workspace as usize) {
             *count = windows.len();

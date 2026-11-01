@@ -32,6 +32,7 @@ thread_local! { static SETTINGS_SCROLL: Cell<f32> = const { Cell::new(0.0) }; }
 enum Setting {
     Theme,
     Backdrop,
+    Font,
     TopBars,
     AutoHide,
     DockHover,
@@ -48,9 +49,10 @@ enum Setting {
     OpenFile,
 }
 
-const ROWS: [(Setting, &str); 16] = [
+const ROWS: [(Setting, &str); 17] = [
     (Setting::Theme, "Theme"),
     (Setting::Backdrop, "Backdrop"),
+    (Setting::Font, "Font"),
     (Setting::TopBars, "Top bar on"),
     (Setting::AutoHide, "Dock auto-hide"),
     (Setting::DockHover, "Dock hover"),
@@ -67,6 +69,19 @@ const ROWS: [(Setting, &str); 16] = [
     (Setting::OpenFile, "Open config file"),
 ];
 
+/// The next installed family in the settings cycle after `current`.
+fn next_font(current: &str) -> &'static str {
+    use windows::Win32::Graphics::DirectWrite::{DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory};
+    let choices = text::FONT_CHOICES;
+    let installed = |name: &str| {
+        name == "auto"
+            || unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) }
+                .is_ok_and(|dwrite| text::font_installed(&dwrite, name))
+    };
+    let start = choices.iter().position(|c| c.eq_ignore_ascii_case(current.trim())).map_or(0, |i| i + 1);
+    (0..choices.len()).map(|i| choices[(start + i) % choices.len()]).find(|c| installed(c)).unwrap_or("auto")
+}
+
 impl Setting {
     /// What the row shows for the current values.
     fn value(self, config: &Config, sign_in: bool) -> String {
@@ -79,6 +94,11 @@ impl Setting {
             Self::Backdrop => match config.appearance.backdrop {
                 Backdrop::Acrylic => "Acrylic",
                 Backdrop::Solid => "Solid",
+            },
+            Self::Font => return if config.appearance.font.trim().eq_ignore_ascii_case("auto") {
+                "Auto".to_owned()
+            } else {
+                config.appearance.font.trim().to_owned()
             },
             Self::TopBars => match config.topbar.monitors {
                 MonitorScope::All => "All monitors",
@@ -128,6 +148,7 @@ impl Setting {
                 };
                 key("appearance", "backdrop", &format!("\"{next}\""))
             }
+            Self::Font => key("appearance", "font", &format!("\"{}\"", next_font(&config.appearance.font))),
             Self::TopBars => {
                 let next = match config.topbar.monitors {
                     MonitorScope::All => "primary",
@@ -449,6 +470,17 @@ impl View for SettingsView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn font_row_cycles_installed_families() {
+        let mut config = Config::default();
+        assert_eq!(Setting::Font.value(&config, false), "Auto");
+        assert!(matches!(Setting::Font.change(&config, false, 1),
+            Change::Key("appearance", "font", ref v) if v == "\"Segoe UI Variable Text\""));
+        config.appearance.font = "Arial".into();
+        assert_eq!(super::next_font("Arial"), "auto");
+        assert_eq!(Setting::Font.value(&config, false), "Arial");
+    }
 
     #[test]
     fn dock_settings_change_effect_and_sizes() {

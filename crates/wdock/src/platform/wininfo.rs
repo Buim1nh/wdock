@@ -265,11 +265,6 @@ pub fn is_fullscreen_app(hwnd: HWND) -> bool {
     !matches!(class_name(root).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") && is_fullscreen(root)
 }
 
-/// Hides without activating anything; async so a hung app cannot block us.
-pub fn hide(hwnd: HWND) {
-    let _ = unsafe { ShowWindowAsync(hwnd, windows::Win32::UI::WindowsAndMessaging::SW_HIDE) };
-}
-
 /// Shows in its previous state (minimized stays minimized) without activating.
 pub fn show(hwnd: HWND) {
     let _ = unsafe { ShowWindowAsync(hwnd, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNA) };

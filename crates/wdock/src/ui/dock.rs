@@ -581,8 +581,7 @@ impl Dock {
         let centre = (m.left + m.right) / 2;
         let dock = RECT { left: centre - half as i32, top, right: centre + half as i32, bottom };
         let model = self.model.borrow();
-        let workspace = model.active_workspace(self.monitor.handle);
-        model.workspace_windows(self.monitor.handle, workspace).into_iter().any(|hwnd| {
+        model.monitor_windows(self.monitor.handle).into_iter().any(|hwnd| {
             if wininfo::is_minimized(hwnd) || !wininfo::is_visible(hwnd) {
                 return false;
             }
@@ -636,10 +635,6 @@ impl Dock {
             if label.is_empty() {
                 label = model.entry_name(&entry).to_owned();
             }
-            if model.is_hidden(hwnd)
-                && let Some((_, ws)) = model.placement(hwnd) {
-                    label = format!("{label}  ·  Workspace {}", ws + 1);
-                }
             let target = self.model.clone();
             items.push(MenuItem::action(label, move || target.borrow_mut().focus(hwnd)));
         }

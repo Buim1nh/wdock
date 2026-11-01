@@ -226,7 +226,6 @@ The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a
 | `[topbar]` | `height` (30), `monitors` (`"all"` or `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible` icons before the overflow chevron (12), `overflow` executable fragments always hidden |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` or `"glass"`), optional `hover_size`, legacy `magnification` (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
-| `[workspaces]` | Legacy setting; desktop count comes from Windows. |
 | `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
 
 When no wdock pin list exists, wdock imports Windows taskbar pins in order and copies their shortcuts to its own data directory. Subsequent changes are saved only to `%LOCALAPPDATA%\wdock\pinned.txt`; they do not change Windows taskbar pins. If import fails, the configuration list is used temporarily and import is retried at the next start. The Windows interface used for the import is undocumented.
@@ -238,7 +237,6 @@ State and logs live in `%LOCALAPPDATA%\wdock\`:
 | `logs\wdock.log`, `logs\wdock-guard.log` | logs (rotated at 2 MB) |
 | `pinned.txt` | pinned apps, in dock order |
 | `tray-hidden.txt`, `tray-shown.txt` | explicit tray icon placement choices |
-| `hidden.txt` | windows parked in other workspaces |
 | `taskbar.txt` | explorer's original auto-hide state |
 
 ## Troubleshooting
@@ -261,7 +259,7 @@ The script:
 
 1. Removes the sign-in task (and the `Run` key entry left by older installs).
 2. Stops the guard, then the shell.
-3. Restores explorer's taskbar and any windows parked in other workspaces.
+3. Restores explorer's taskbar (and any windows an older version left hidden).
 
 `-RemoveFiles` also deletes the installed binary, and `-RemoveData` also deletes logs, caches and state. Your configuration is kept either way.
 
@@ -291,7 +289,7 @@ The source is in `crates/wdock/src`:
 | `ui/` | Direct2D bars, the dock, the island, popups, composition layers |
 | `platform/` | Win32 wrappers, the tray host, AppBars, window events |
 | `services/` | audio, network and Wi-Fi, power, brightness, media session, app index, icons |
-| `model/` | configuration, windows and workspaces, tray, search, Pomodoro |
+| `model/` | configuration, windows, tray, search, Pomodoro |
 
 ## Measurements
 

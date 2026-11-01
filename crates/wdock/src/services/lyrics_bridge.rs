@@ -135,7 +135,7 @@ fn accept_timed(body: &str) -> Option<()> {
                 words.push((a, b, word, joined));
             }
         }
-        lines.push(TimedLine { start, end, text, words });
+        lines.push(TimedLine { start, text, words });
     }
     if lines.windows(2).any(|pair| pair[0].start > pair[1].start) { return None; }
     let mut colors = Vec::new();

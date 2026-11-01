@@ -1505,7 +1505,7 @@ fn lyrics_background_pixels(art: Option<&media::Art>, colors: &[[u8; 3]]) -> Vec
             }
         }
     }
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         // Boost saturation before dimming, retaining contrast for white text.
         let luminance = f32::from(pixel[0]) * 0.114 + f32::from(pixel[1]) * 0.587 + f32::from(pixel[2]) * 0.299;
         let intensity = if colors.len() == 96 { 0.80 } else { 0.62 };

@@ -64,7 +64,7 @@ const HOTKEY_EMERGENCY_EXIT: i32 = 1;
 const HOTKEY_LAUNCHER: i32 = 2;
 
 const WM_APP_REBUILD: u32 = WM_APP + 1;
-/// The window model changed outside a WinEvent batch (workspace switch, pinning).
+/// The window model changed outside a WinEvent batch (pinning).
 const WM_APP_NOTIFY: u32 = WM_APP + 4;
 /// An AppBar notification says a full-screen app came or went.
 const WM_APP_FULLSCREEN: u32 = WM_APP + 5;
@@ -73,7 +73,6 @@ const WM_APP_CONFIG: u32 = WM_APP + 24;
 const WM_APP_ISLAND_APPEARANCE: u32 = WM_APP + 25;
 const WM_APP_LYRICS: u32 = WM_APP + 26;
 const TIMER_REBUILD: usize = 1;
-const TIMER_FOCUS: usize = 2;
 const TIMER_RECLAIM: usize = 3;
 const TIMER_POMODORO: usize = 4;
 const TIMER_APPBAR: usize = 5;
@@ -83,8 +82,6 @@ const APPBAR_CHECK_MS: u32 = 1500;
 /// one, e.g. ours at start right after explorer's or a previous wdock's.
 /// One more broadcast a little later catches them; duplicate adds are refused.
 const RECLAIM_DELAY_MS: u32 = 5000;
-/// Windows shown by `ShowWindowAsync` need a moment before they can be activated.
-const FOCUS_DELAY_MS: u32 = 60;
 const REBUILD_DEBOUNCE_MS: u32 = 250;
 const HSHELL_WINDOWACTIVATED: usize = 4;
 const HSHELL_RUDEAPPACTIVATED: usize = 0x8004;
@@ -95,7 +92,6 @@ static SHELLHOOK_MSG: AtomicU32 = AtomicU32::new(0);
 static TASKBAR_CREATED_MSG: AtomicU32 = AtomicU32::new(0);
 
 thread_local! {
-    static PENDING_FOCUS: Cell<Option<HWND>> = const { Cell::new(None) };
     /// Explorer's taskbar we last saw; a new one means explorer restarted.
     static EXPLORER_TASKBAR: Cell<Option<HWND>> = const { Cell::new(None) };
 }
@@ -155,12 +151,6 @@ pub fn schedule_pomodoro(delay_ms: Option<u32>) {
     }
 }
 
-/// Activates `hwnd` shortly, once an asynchronous show has completed.
-pub fn focus_later(hwnd: HWND) {
-    PENDING_FOCUS.set(Some(hwnd));
-    unsafe { SetTimer(Some(main_hwnd()), TIMER_FOCUS, FOCUS_DELAY_MS, None) };
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebuildReason {
     Display = 0,
@@ -202,6 +192,7 @@ fn with_shell(f: impl FnOnce(&mut Shell)) {
 impl Shell {
     fn rebuild(&mut self) {
         self.destroy_bars();
+        crate::ui::text::set_ui_font(&self.config.appearance.font);
         island::configure(&self.config.island);
         if std::mem::take(&mut self.pending_device_lost) {
             self.gfx = None;
@@ -398,7 +389,6 @@ pub fn run(mode: Mode) -> Result<()> {
     let model = Rc::new(RefCell::new(WindowModel::new(
         &pinned,
         config.dock.icon_source_size(max_scale),
-        1,
     )));
     // Install hooks before scanning so no window slips through in between.
     let _hooks = winevents::install(hwnd);
@@ -448,7 +438,6 @@ pub fn run(mode: Mode) -> Result<()> {
         if let Some(mut shell) = shell.take() {
             shell.destroy_bars();
             island::shutdown();
-            shell.model.borrow_mut().show_all_hidden();
         }
     });
     explorer::restore_taskbar();
@@ -623,11 +612,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             }
             LRESULT(0)
         }
-        // Sign-out or shutdown: show workspace-hidden windows so apps asking to
-        // save their documents are visible, and put explorer's taskbar setting
-        // back so it is saved unchanged. A cancelled sign-out re-hides it.
+        // Sign-out or shutdown: put explorer's taskbar setting back so it is
+        // saved unchanged. A cancelled sign-out re-hides it.
         WM_QUERYENDSESSION => {
-            with_shell(|shell| shell.model.borrow_mut().show_all_hidden());
             explorer::restore_taskbar();
             LRESULT(1)
         }
@@ -666,13 +653,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         WM_TIMER if wparam.0 == TIMER_RECLAIM => {
             let _ = unsafe { KillTimer(Some(hwnd), TIMER_RECLAIM) };
             tray_host::reclaim();
-            LRESULT(0)
-        }
-        WM_TIMER if wparam.0 == TIMER_FOCUS => {
-            let _ = unsafe { KillTimer(Some(hwnd), TIMER_FOCUS) };
-            if let Some(target) = PENDING_FOCUS.take() {
-                wininfo::activate(target);
-            }
             LRESULT(0)
         }
         WM_APP_REBUILD => {
