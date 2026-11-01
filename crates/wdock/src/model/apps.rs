@@ -65,6 +65,8 @@ impl Pinned {
     pub fn matches(&self, identity: &Identity) -> bool {
         self.aumid.as_ref().is_some_and(|a| identity.aumid.as_ref() == Some(a))
             || self.exe.as_ref().is_some_and(|e| *e == identity.exe)
+            || (self.aumid.as_deref().is_some_and(|a| a.starts_with("com.squirrel."))
+                && self.exe.as_ref().is_some_and(|e| squirrel_version_match(e, &identity.exe)))
     }
 
     pub fn resolve(wic: &IWICImagingFactory, target: &str, icon_px: u32) -> Option<Self> {
@@ -102,6 +104,18 @@ impl Pinned {
         log::debug!("pinned {name}: aumid={aumid:?} exe={exe:?}");
         Some(Self { target: target.to_owned(), name, aumid, exe, icon })
     }
+}
+
+/// Squirrel shortcuts can point to app.exe while the running executable is
+/// in the application's app-<version> child directory.
+fn squirrel_version_match(pinned: &str, running: &str) -> bool {
+    let Some((parent, filename)) = pinned.rsplit_once('\\') else { return false; };
+    let Some(rest) = running.strip_prefix(parent).and_then(|s| s.strip_prefix("\\app-")) else { return false; };
+    let Some((version, running_name)) = rest.split_once('\\') else { return false; };
+    !version.is_empty()
+        && version.bytes().next().is_some_and(|b| b.is_ascii_digit())
+        && version.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        && filename == running_name
 }
 
 /// Name, icon and launch target for an app that is running but not pinned.
@@ -170,5 +184,16 @@ mod tests {
         let plain = Identity { aumid: None, exe: "x.exe".into() };
         assert_eq!(packaged.key(), AppKey::Aumid("app!id".into()));
         assert_eq!(plain.key(), AppKey::Exe("x.exe".into()));
+    }
+
+    #[test]
+    fn squirrel_shortcut_matches_only_its_versioned_executable() {
+        let pin = pinned(Some("com.squirrel.discord.discord"), Some(r"c:\users\a\discord\discord.exe"));
+        let window = |exe: &str| Identity { aumid: None, exe: exe.into() };
+        assert!(pin.matches(&window(r"c:\users\a\discord\app-1.0.9266\discord.exe")));
+        assert!(!pin.matches(&window(r"c:\users\a\discord\app-1.0.9266\other.exe")));
+        assert!(!pin.matches(&window(r"c:\users\a\other\app-1.0\discord.exe")));
+        assert!(!pin.matches(&window(r"c:\users\a\discord\app-backup\discord.exe")));
+        assert!(!pinned(None, pin.exe.as_deref()).matches(&window(r"c:\users\a\discord\app-1.0\discord.exe")));
     }
 }

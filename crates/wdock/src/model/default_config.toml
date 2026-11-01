@@ -27,12 +27,16 @@ max_visible = 12
 overflow = []
 
 [dock]
-# 32 or 48 are sizes most apps ship icons at, so they look sharpest.
+# Icon sizes are device-independent pixels and scale with monitor DPI.
 icon_size = 32
 monitors = "primary"
 # Which windows a dock shows: "all" or only those on its own monitor ("this-monitor").
 windows = "all"
-# Hovered icons grow up to this factor; 1 turns magnification off.
+# "magnify" enlarges hovered icons; "glass" highlights without resizing.
+hover_effect = "magnify"
+# Optional maximum icon size during magnification (16-192, at most 3x icon_size).
+# hover_size = 64
+# Legacy factor used when hover_size is not set.
 magnification = 2.0
 # "smart" slides the dock away while a window overlaps it (maximized apps
 # fill the screen), "on" always hides it until the pointer touches the
@@ -41,7 +45,8 @@ auto_hide = "smart"
 # Executable paths, URIs, or shell:AppsFolder\<AppUserModelID>.
 # Entries that cannot be resolved are skipped (see the log).
 # Pinning, unpinning or reordering from the dock saves the list to
-# %LOCALAPPDATA%\wdock\pinned.txt, which then wins; delete it to use this one.
+# %LOCALAPPDATA%\wdock\pinned.txt. When absent, Windows taskbar pins are
+# imported once; this list is the fallback if the import fails.
 pinned = [
     'shell:AppsFolder\Microsoft.Windows.Explorer',
     'shell:AppsFolder\MSEdge',
@@ -54,7 +59,7 @@ pinned = [
 # including the overview and workspaces, is on the top bar.
 
 [workspaces]
-# Workspaces per monitor (1-9).
+# Legacy setting retained for compatibility; the bar uses Windows virtual desktops.
 count = 4
 
 [island]
@@ -62,10 +67,16 @@ count = 4
 # (any app that shows Windows' media controls), a Pomodoro timer and short
 # notices. Hover to expand. false removes the window and the media subscription.
 enabled = true
+# Compact appearance: "island" or a top-edge "notch"; width is in DIPs.
+style = "island"
+notch_width = 200.0
+# Enable optional widgets and choose their tab order.
+file_shelf = true
+widget_order = ["media", "files"]
 # Pomodoro lengths in minutes.
 pomodoro_work = 25
 pomodoro_break = 5
-# Briefly expand when volume, brightness, charging, battery, network or the
+# Briefly expand when brightness, charging, battery, network or the
 # audio device change. Windows' own pop-ups are left alone.
 notices = true
 # Animate the equalizer next to what is playing. Windows' compositor (DWM)

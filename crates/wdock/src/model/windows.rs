@@ -144,6 +144,25 @@ impl WindowModel {
         }
     }
 
+    /// Reload icon sources only when their requested resolution changes.
+    pub fn set_icon_size(&mut self, icon_px: u32) {
+        if self.icon_px == icon_px { return; }
+        self.icon_px = icon_px;
+        let Some(wic) = self.wic.as_ref() else { return; };
+        for pin in &mut self.pinned {
+            if let Some(fresh) = Pinned::resolve(wic, &pin.target, icon_px)
+                && fresh.icon.is_some() {
+                    pin.icon = fresh.icon;
+                }
+        }
+        for (key, app) in &mut self.apps {
+            if let Some(window) = self.windows.iter().find(|w| w.identity.key() == *key) {
+                let fresh = AppInfo::resolve(Some(wic), &window.identity, icon_px, app.first_seen);
+                if fresh.icon.is_some() { app.icon = fresh.icon; }
+            }
+        }
+    }
+
     /// Picks up windows that existed before the hooks were installed.
     pub fn scan(&mut self) {
         let mut found: Vec<HWND> = Vec::new();
@@ -417,10 +436,6 @@ impl WindowModel {
 
     // ---- workspaces ----
 
-    pub fn workspace_count(&self) -> u8 {
-        self.workspaces
-    }
-
     pub fn active_workspace(&self, monitor: HMONITOR) -> u8 {
         self.active.get(&mon(monitor)).copied().unwrap_or(0).min(self.workspaces - 1)
     }
@@ -435,6 +450,7 @@ impl WindowModel {
     }
 
     /// Window count per workspace on `monitor`.
+    #[cfg(test)]
     pub fn occupancy(&self, monitor: HMONITOR) -> Vec<usize> {
         let mut counts = vec![0; self.workspaces as usize];
         for w in self.windows.iter().filter(|w| w.monitor == monitor) {
@@ -489,6 +505,7 @@ impl WindowModel {
 
     /// Moves a window to another workspace of its monitor, hiding it if that
     /// workspace is not the one showing.
+    #[cfg(test)]
     pub fn move_window(&mut self, hwnd: HWND, workspace: u8) -> bool {
         let workspace = workspace.min(self.workspaces - 1);
         let Some(i) = self.index(hwnd) else {

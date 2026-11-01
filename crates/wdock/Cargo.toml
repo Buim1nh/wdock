@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 log.workspace = true
+winvd = "0.0.49"
+windows058 = { package = "windows", version = "0.58", features = ["Win32_Foundation"] }
 serde = { version = "1", features = ["derive"] }
 windows-core = "0.62"
 windows-future = "0.3"
@@ -16,7 +18,9 @@ toml = { version = "1", default-features = false, features = ["parse", "serde"] 
 [dependencies.windows]
 workspace = true
 features = [
+    "Data_Json",
     "Foundation",
+    "Web_Http",
     "Win32_Devices_Display",
     "Media_Control",
     "Storage_Streams",
@@ -48,6 +52,7 @@ features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Com",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_Variant",

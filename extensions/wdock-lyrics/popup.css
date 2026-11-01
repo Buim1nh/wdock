@@ -1,0 +1,14 @@
+:root { color-scheme: dark; font: 13px "Segoe UI", sans-serif; background: #111316; color: #f4f5f6; }
+* { box-sizing: border-box; }
+body { width: 350px; margin: 0; }
+header { display: flex; align-items: center; gap: 8px; padding: 15px 16px; color: #b9bdc5; border-bottom: 1px solid #292c32; }
+header strong { color: #fff; } header a { margin-left: auto; color: #8d949f; font-size: 11px; text-decoration: none; }
+.mark { display: grid; place-items: center; width: 26px; height: 26px; color: #fff; background: #2689ee; border-radius: 9px; font-size: 16px; }
+.track { padding: 15px 18px; background: #1b1e23; }
+#title { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#artist { color: #9da4af; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+main { height: 290px; overflow: auto; padding: 13px 18px; scroll-behavior: smooth; }
+main p { margin: 0; padding: 7px 0; color: #858d99; line-height: 1.45; }
+main p.active { color: #fff; font-weight: 600; }
+main p.hint { color: #a6adb8; }
+footer { padding: 10px 18px; border-top: 1px solid #292c32; color: #858d99; font-size: 11px; }

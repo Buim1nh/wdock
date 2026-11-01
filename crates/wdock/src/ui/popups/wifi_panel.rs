@@ -125,12 +125,15 @@ impl WifiPanel {
                 y += ROW * s;
             }
         }
+        y += 6.0 * s;
         if self.session.is_some() {
             let half = (right - left) / 2.0;
             if self.connected() {
-                self.targets.push((WifiHit::Disconnect, rect(left, y, left + half, y + FOOTER * s)));
+                self.targets.push((WifiHit::Disconnect, rect(left, y, left + half - 3.0 * s, y + FOOTER * s)));
+                self.targets.push((WifiHit::Settings, rect(left + half + 3.0 * s, y, right, y + FOOTER * s)));
+            } else {
+                self.targets.push((WifiHit::Settings, rect(left, y, right, y + FOOTER * s)));
             }
-            self.targets.push((WifiHit::Settings, rect(left + half, y, right, y + FOOTER * s)));
             y += FOOTER * s;
         } else {
             self.targets.push((WifiHit::Settings, rect(left, y, right, y + FOOTER * s)));
@@ -238,7 +241,7 @@ impl WifiPanel {
                     text::draw(cx, REFRESH, &icon, r, theme.text);
                 }
                 WifiHit::Disconnect | WifiHit::Settings => {
-                    fill(r, 8.0 * s, plate(hit));
+                    fill(r, 12.0 * s, plate(hit));
                     let label = if hit == WifiHit::Disconnect { "Disconnect" } else { "Wi-Fi settings" };
                     text::draw(cx, label, &centred, r, theme.text);
                 }
@@ -247,7 +250,7 @@ impl WifiPanel {
                         continue;
                     };
                     if hot == Some(hit) {
-                        fill(r, 8.0 * s, theme.hover);
+                        fill(r, 12.0 * s, theme.hover);
                     }
                     // Signal bars.
                     let bars = wifi::bars(network.signal);

@@ -163,6 +163,16 @@ pub fn toggle_overflow(anchor: RECT, scale: f32) {
     OVERFLOW.set(open(spec, Box::new(view)));
 }
 
+/// Open the overflow without taking focus or mouse capture during a drag.
+pub fn open_overflow_for_drag(anchor: RECT, scale: f32) {
+    if OVERFLOW.get().is_some_and(alive) { return; }
+    let Some(ctx) = context() else { return; };
+    let view = OverflowView::new(ctx.tray.clone(), anchor, monitor_rect(anchor), scale);
+    let Some(rect) = view.frame() else { return; };
+    let spec = BarSpec { rect, scale, corners: Corners::Round, activate: false };
+    OVERFLOW.set(open(spec, Box::new(view)));
+}
+
 /// Opens an activatable panel built by make in slot, or closes it if open.
 fn toggle_panel(
     slot: &'static std::thread::LocalKey<Cell<Option<HWND>>>,

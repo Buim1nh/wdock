@@ -84,9 +84,13 @@ impl OverviewView {
     /// Re-reads the workspace from the model and lays everything out.
     fn reload(&mut self) {
         let model = self.model.borrow();
-        self.workspace = model.active_workspace(self.monitor.handle);
-        self.occupancy = model.occupancy(self.monitor.handle);
-        let windows = model.workspace_windows(self.monitor.handle, self.workspace);
+        let state = crate::platform::virtual_desktops::state();
+        self.workspace = state.as_ref().map_or(0, |s| s.current);
+        let windows = model.workspace_windows(self.monitor.handle, 0);
+        self.occupancy = vec![0; state.map_or(1, |s| s.count as usize)];
+        if let Some(count) = self.occupancy.get_mut(self.workspace as usize) {
+            *count = windows.len();
+        }
         drop(model);
         if windows != self.windows {
             self.windows = windows;
@@ -155,9 +159,7 @@ impl OverviewView {
 
     fn switch_to(&mut self, workspace: u8) {
         // The overview keeps focus; picking a window afterwards activates it.
-        let _ = self.model.borrow_mut().switch_workspace(self.monitor.handle, workspace);
-        crate::app::notify_model();
-        self.reload();
+        crate::platform::virtual_desktops::switch(workspace);
     }
 }
 
@@ -207,11 +209,11 @@ impl View for OverviewView {
             let mid = r.top + (r.bottom - r.top) * 0.45;
             text::draw(cx, &(i + 1).to_string(), &number, rect(r.left, r.top, r.right, mid + 6.0 * s), theme.text);
             let count = self.occupancy.get(i).copied().unwrap_or(0);
-            let label = match count {
+            let label = if ws != self.workspace { String::new() } else { match count {
                 0 => "Empty".to_owned(),
                 1 => "1 window".to_owned(),
                 n => format!("{n} windows"),
-            };
+            }};
             text::draw(cx, &label, &detail, rect(r.left, mid + 4.0 * s, r.right, r.bottom - 6.0 * s), theme.text_dim);
         }
 
@@ -279,7 +281,7 @@ impl View for OverviewView {
         match (drag, self.hit(x, y)) {
             (Some(d), Some(Hot::Workspace(ws))) if d.active => {
                 let hwnd = self.windows[d.index];
-                if self.model.borrow_mut().move_window(hwnd, ws) {
+                if crate::platform::virtual_desktops::move_window(hwnd, ws) {
                     crate::app::notify_model();
                 }
                 self.reload();

@@ -87,8 +87,48 @@ pub struct DockConfig {
     pub windows: DockWindows,
     /// Hovered icons grow up to this factor; 1 turns magnification off.
     pub magnification: f32,
+    pub hover_effect: DockHoverEffect,
+    /// Hovered icon size in DIPs; None keeps the legacy magnification factor.
+    pub hover_size: Option<f32>,
     pub auto_hide: AutoHide,
     pub pinned: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DockHoverEffect {
+    #[default]
+    Magnify,
+    Glass,
+}
+
+impl DockConfig {
+    pub fn base_icon_size(&self) -> f32 {
+        if self.icon_size.is_finite() { self.icon_size.clamp(16.0, 96.0) } else { 32.0 }
+    }
+
+    pub fn hover_icon_size(&self) -> f32 {
+        let base = self.base_icon_size();
+        let value = self.hover_size.filter(|n| n.is_finite()).unwrap_or_else(|| {
+            let factor = if self.magnification.is_finite() { self.magnification.clamp(1.0, 3.0) } else { 2.0 };
+            base * factor
+        });
+        value.clamp(base, (base * 3.0).min(192.0))
+    }
+
+    pub fn icon_render_size(&self) -> f32 {
+        match self.hover_effect {
+            DockHoverEffect::Magnify => self.hover_icon_size(),
+            DockHoverEffect::Glass => self.base_icon_size(),
+        }
+    }
+
+    /// Request a high-resolution shell icon once, then reuse it for hover.
+    pub fn icon_source_size(&self, scale: f32) -> u32 {
+        let scale = if scale.is_finite() { scale.max(1.0) } else { 1.0 };
+        let needed = self.icon_render_size() * scale;
+        if needed <= 128.0 { 128 } else if needed <= 256.0 { 256 } else { 512 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -110,15 +150,30 @@ pub struct WorkspacesConfig {
 #[serde(default)]
 pub struct IslandConfig {
     pub enabled: bool,
+    pub style: IslandStyle,
+    pub notch_width: f32,
     /// Pomodoro focus length, minutes.
     pub pomodoro_work: u32,
     /// Pomodoro break length, minutes.
     pub pomodoro_break: u32,
-    /// Briefly expand for volume, brightness, power, network and audio-device changes.
+    /// Briefly expand for brightness, power, network and audio-device changes.
     pub notices: bool,
     /// Animate the compact equalizer while media plays. DirectComposition
     /// plays the animation, so wdock itself does no work per frame.
     pub animate_equalizer: bool,
+    pub lyrics_background_motion: bool,
+    pub file_shelf: bool,
+    pub widget_order: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IslandStyle { Island, Notch }
+
+impl IslandConfig {
+    pub fn notch_width(&self) -> f32 {
+        if self.notch_width.is_finite() { self.notch_width.clamp(160.0, 400.0) } else { 200.0 }
+    }
 }
 
 // Defaults are spelled out here rather than parsed from the template: serde's
@@ -168,6 +223,8 @@ impl Default for DockConfig {
             monitors: MonitorScope::Primary,
             windows: DockWindows::All,
             magnification: 2.0,
+            hover_effect: DockHoverEffect::Magnify,
+            hover_size: None,
             auto_hide: AutoHide::Smart,
             pinned: [
                 r"shell:AppsFolder\Microsoft.Windows.Explorer",
@@ -189,7 +246,12 @@ impl Default for WorkspacesConfig {
 
 impl Default for IslandConfig {
     fn default() -> Self {
-        Self { enabled: true, pomodoro_work: 25, pomodoro_break: 5, notices: true, animate_equalizer: true }
+        Self {
+            enabled: true, style: IslandStyle::Island, notch_width: 200.0,
+            pomodoro_work: 25, pomodoro_break: 5, notices: true, animate_equalizer: true,
+            file_shelf: true, lyrics_background_motion: true,
+            widget_order: vec!["media".into(), "files".into()],
+        }
     }
 }
 
@@ -248,5 +310,33 @@ mod tests {
         assert_eq!(config.dock.icon_size, 64.0);
         assert_eq!(config.topbar.time_format, "HH:mm");
         assert!(!config.dock.pinned.is_empty());
+    }
+
+    #[test]
+    fn notch_settings_are_compatible_and_bounded() {
+        let config: Config = toml::from_str("[island]\nstyle = 'notch'\nnotch_width = 900.0").unwrap();
+        assert_eq!(config.island.style, IslandStyle::Notch);
+        assert_eq!(config.island.notch_width(), 400.0);
+        let legacy: Config = toml::from_str("[island]\nenabled = true").unwrap();
+        assert_eq!(legacy.island.style, IslandStyle::Island);
+        assert_eq!(legacy.island.notch_width(), 200.0);
+    }
+
+    #[test]
+    fn dock_hover_sizes_are_bounded_and_preserve_legacy_factor() {
+        let mut dock = DockConfig::default();
+        assert_eq!(dock.base_icon_size(), 32.0);
+        assert_eq!(dock.hover_icon_size(), 64.0);
+        dock.magnification = 1.5;
+        assert_eq!(dock.hover_icon_size(), 48.0);
+        dock.hover_size = Some(400.0);
+        assert_eq!(dock.hover_icon_size(), 96.0);
+        dock.hover_size = Some(10.0);
+        assert_eq!(dock.hover_icon_size(), 32.0);
+        dock.hover_effect = DockHoverEffect::Glass;
+        assert_eq!(dock.icon_render_size(), 32.0);
+        assert_eq!(dock.icon_source_size(1.25), 128);
+        dock.icon_size = f32::NAN;
+        assert_eq!(dock.base_icon_size(), 32.0);
     }
 }

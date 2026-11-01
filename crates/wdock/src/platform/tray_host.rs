@@ -24,7 +24,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW,
     FindWindowW, HICON, KillTimer, SetTimer, WM_TIMER,
-    HWND_BROADCAST, HWND_TOPMOST, IsWindow, PostMessageW, RegisterClassW, RegisterWindowMessageW,
+    HWND_BROADCAST, HWND_TOPMOST, HWND_BOTTOM, IsWindow, PostMessageW, RegisterClassW, RegisterWindowMessageW,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendNotifyMessageW, SetWindowPos, WM_APP,
     WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER, WNDCLASSW, InSendMessage, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
@@ -64,6 +64,18 @@ thread_local! {
     static WIC: RefCell<Option<IWICImagingFactory>> = const { RefCell::new(None) };
 }
 
+/// Shell APIs discover the taskbar by class and must reach Explorer directly.
+/// Temporarily lower our proxy while negotiating an AppBar reservation.
+pub fn with_explorer_taskbar<T>(f: impl FnOnce() -> T) -> T {
+    let hwnd = TRAY_HWND.get();
+    if hwnd.is_invalid() || crate::explorer::taskbar().is_none() { return f(); }
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+    let _ = unsafe { SetWindowPos(hwnd, Some(HWND_BOTTOM), 0, 0, 0, 0, flags) };
+    let result = f();
+    let _ = unsafe { SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags) };
+    result
+}
+
 /// Runs `f` on the tray model. Returns `None` if it is unavailable or busy.
 pub fn with_tray<R>(f: impl FnOnce(&mut TrayModel) -> R) -> Option<R> {
     TRAY.with(|tray| tray.try_borrow_mut().ok()?.as_mut().map(f))
@@ -75,6 +87,7 @@ pub fn take_events() -> Vec<TrayEvent> {
 
 pub struct TrayHost {
     hwnd: HWND,
+    _preferences_watcher: Option<crate::platform::tray_preferences::Watcher>,
 }
 
 impl TrayHost {
@@ -88,6 +101,8 @@ impl TrayHost {
         );
         let mut model = TrayModel::new(TrayEnv { load_icon, exe_of, is_window });
         model.set_hidden(tray_hidden::load());
+        model.set_shown(tray_hidden::load_shown());
+        model.set_windows_preferences(crate::platform::tray_preferences::load());
         TRAY.set(Some(model));
 
         let instance = unsafe { GetModuleHandleW(None)? };
@@ -120,7 +135,8 @@ impl TrayHost {
         keep_on_top(hwnd);
         broadcast_taskbar_created();
         log::info!("tray host ready");
-        Ok(Self { hwnd })
+        let watcher = crate::platform::tray_preferences::Watcher::start(notify);
+        Ok(Self { hwnd, _preferences_watcher: watcher })
     }
 }
 

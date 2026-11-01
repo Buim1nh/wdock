@@ -7,7 +7,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::Globalization::{GetDateFormatEx, GetTimeFormatEx, TIME_FORMAT_FLAGS};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectWrite::{
@@ -31,6 +30,8 @@ use crate::ui::tray_strip::{self, TrayStrip};
 
 const TIMER_CLOCK: usize = 1;
 const PADDING_X: f32 = 12.0;
+/// All top-bar controls share this vertical inset and the same centre line.
+const CONTROL_INSET_Y: f32 = 3.0;
 const LAUNCHER_WIDTH: f32 = 36.0;
 const TRAY_SLOT: f32 = 26.0;
 const CHEVRON_WIDTH: f32 = 22.0;
@@ -44,6 +45,18 @@ const OVERVIEW_WIDTH: f32 = 32.0;
 const GLYPH_CHEVRON: &str = "\u{E70D}";
 const PILL_WIDTH: f32 = 22.0;
 const PILL_GAP: f32 = 3.0;
+
+/// The separator occupies the bottom physical pixel(s), outside the visible row.
+pub(crate) fn content_height(height: f32, scale: f32) -> f32 {
+    (height - scale.max(1.0).ceil()).max(0.0)
+}
+
+/// Symmetric bounds within the bar background above its bottom separator.
+fn vertical_bounds(height: f32, scale: f32) -> (f32, f32) {
+    let content = content_height(height, scale);
+    let inset = (CONTROL_INSET_Y * scale).clamp(0.0, content / 2.0);
+    (inset, content - inset)
+}
 
 struct Formats {
     scale: f32,
@@ -94,7 +107,6 @@ pub struct TopBar {
     chevron: Option<D2D_RECT_F>,
     status: SystemStatus,
     layout: StatusLayout,
-    monitor: HMONITOR,
     /// Active workspace and per-workspace window counts on this monitor.
     workspaces: (u8, Vec<usize>),
     pills: Vec<D2D_RECT_F>,
@@ -105,7 +117,6 @@ impl TopBar {
         config: &TopBarConfig,
         tray: Option<TrayConfig>,
         model: Rc<RefCell<WindowModel>>,
-        monitor: HMONITOR,
         scale: f32,
     ) -> Self {
         let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
@@ -127,7 +138,6 @@ impl TopBar {
             chevron: None,
             status: services::status(),
             layout: StatusLayout::default(),
-            monitor,
             workspaces: (0, Vec::new()),
             pills: Vec::new(),
         };
@@ -138,11 +148,9 @@ impl TopBar {
     }
 
     fn current_workspaces(&self) -> (u8, Vec<usize>) {
-        let model = self.model.borrow();
-        if model.workspace_count() < 2 {
-            return (0, Vec::new());
-        }
-        (model.active_workspace(self.monitor), model.occupancy(self.monitor))
+        crate::platform::virtual_desktops::state()
+            .map(|state| (state.current, vec![0; state.count as usize]))
+            .unwrap_or_default()
     }
 
     fn current_title(&self) -> String {
@@ -181,17 +189,19 @@ impl TopBar {
     fn overview_rect(&self, height: f32) -> D2D_RECT_F {
         let s = self.scale;
         let left = (PADDING_X / 2.0 + LAUNCHER_WIDTH + 2.0) * s;
-        rect(left, 3.0 * s, left + OVERVIEW_WIDTH * s, height - 3.0 * s)
+        let (top, bottom) = vertical_bounds(height, s);
+        rect(left, top, left + OVERVIEW_WIDTH * s, bottom)
     }
 
     fn launcher_rect(&self, height: f32) -> D2D_RECT_F {
         let s = self.scale;
-        rect(PADDING_X / 2.0 * s, 3.0 * s, (PADDING_X / 2.0 + LAUNCHER_WIDTH) * s, height - 3.0 * s)
+        let (top, bottom) = vertical_bounds(height, s);
+        rect(PADDING_X / 2.0 * s, top, (PADDING_X / 2.0 + LAUNCHER_WIDTH) * s, bottom)
     }
 
     fn hot_at(&self, x: f32, y: f32) -> Option<Hot> {
         let inside = |r: D2D_RECT_F| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
-        if x < (PADDING_X / 2.0 + LAUNCHER_WIDTH) * self.scale {
+        if inside(self.launcher_rect(self.height)) {
             Some(Hot::Launcher)
         } else if inside(self.overview_rect(self.height)) {
             Some(Hot::Overview)
@@ -223,7 +233,7 @@ impl TopBar {
     /// Returns the left edge used.
     fn paint_status(&mut self, cx: &PaintCx, formats: &Formats, right: f32) -> f32 {
         let s = cx.scale;
-        let (top, bottom) = (3.0 * s, cx.height - 3.0 * s);
+        let (top, bottom) = vertical_bounds(cx.height, s);
         let theme = cx.theme;
         let mut x = right;
         let mut take = |width: f32| {
@@ -268,16 +278,13 @@ impl TopBar {
                     cx.dc.FillRoundedRectangle(&rounded(cap, 1.0 * s), &brush);
                 }
             }
-            let low = b.percent <= 20 && !b.plugged;
-            let fill_color = if low { crate::ui::gfx::rgba(255, 69, 58, 1.0) } else { theme.text };
+            let fill_color = crate::ui::battery::level_color(b, theme.text);
             let inner = rect(body.left + 2.0 * s, body.top + 2.0 * s, body.right - 2.0 * s, body.bottom - 2.0 * s);
             let level = rect(inner.left, inner.top, inner.left + (inner.right - inner.left) * f32::from(b.percent) / 100.0, inner.bottom);
             if let Ok(brush) = cx.gfx.brush(fill_color) {
                 unsafe { cx.dc.FillRoundedRectangle(&rounded(level, 1.5 * s), &brush) };
             }
-            if b.charging || b.plugged {
-                text::draw(cx, glyphs::CHARGING, &formats.small_icon, body, theme.accent);
-            }
+            crate::ui::battery::mark(cx, body, b, &formats.small_icon);
         }
         x
     }
@@ -318,13 +325,24 @@ impl TopBar {
         };
         self.tray_revision = revision;
 
-        let (top, bottom) = (3.0 * s, height - 3.0 * s);
+        let (top, bottom) = vertical_bounds(height, s);
         let mut x = right;
-        self.chevron = has_overflow.then(|| {
+        let _ = has_overflow;
+        self.chevron = Some({
             let chevron = rect(x - CHEVRON_WIDTH * s, top, x, bottom);
             x -= (CHEVRON_WIDTH + 2.0) * s;
             chevron
         });
+        if let Some(chevron) = self.chevron {
+            let origin = bar::screen_rect(self.hwnd);
+            let target = RECT {
+                left: origin.left + (chevron.left - 5.0 * s).round() as i32,
+                top: origin.top,
+                right: origin.left + (chevron.right + 5.0 * s).round() as i32,
+                bottom: origin.bottom,
+            };
+            tray_strip::set_drop_targets(origin, target);
+        }
         let mut slots: Vec<(u64, D2D_RECT_F)> = ids
             .iter()
             .rev()
@@ -385,12 +403,13 @@ impl View for TopBar {
         let clock_right = w - PADDING_X * s;
         let (clock_width, _) = text::measure(&cx.gfx.dwrite, &self.clock, &formats.clock, w);
         let clock_left = clock_right - clock_width;
-        let clock_plate = rect(clock_left - 6.0 * s, 3.0 * s, clock_right + 6.0 * s, h - 3.0 * s);
+        let (content_top, content_bottom) = vertical_bounds(h, s);
+        let clock_plate = rect(clock_left - 6.0 * s, content_top, clock_right + 6.0 * s, content_bottom);
         self.layout.clock = Some(clock_plate);
         if self.hot == Some(Hot::Clock) {
             hover_plate(clock_plate);
         }
-        text::draw(cx, &self.clock, &formats.clock, rect(clock_left - 4.0, 0.0, clock_right, h), cx.theme.text);
+        text::draw(cx, &self.clock, &formats.clock, rect(clock_left - 4.0 * s, content_top, clock_right, content_bottom), cx.theme.text);
 
         let status_left = if self.tray_config.is_some() {
             self.paint_status(cx, &formats, clock_plate.left - 4.0 * s)
@@ -414,7 +433,7 @@ impl View for TopBar {
         let mut pill_x = overview.right + 4.0 * s;
         self.pills.clear();
         for (i, &count) in self.workspaces.1.iter().enumerate() {
-            let pill = rect(pill_x, 6.0 * s, pill_x + PILL_WIDTH * s, h - 6.0 * s);
+            let pill = rect(pill_x, content_top, pill_x + PILL_WIDTH * s, content_bottom);
             pill_x = pill.right + PILL_GAP * s;
             let active = i as u8 == self.workspaces.0;
             let fill = if active {
@@ -441,7 +460,7 @@ impl View for TopBar {
 
         let title_left = if self.pills.is_empty() { overview.right + 6.0 * s } else { pill_x + 8.0 * s };
         let title_right = (tray_left - 12.0 * s).max(title_left);
-        text::draw(cx, &self.title, &formats.title, rect(title_left, 0.0, title_right, h), cx.theme.text);
+        text::draw(cx, &self.title, &formats.title, rect(title_left, content_top, title_right, content_bottom), cx.theme.text);
         self.formats = Some(formats);
     }
 
@@ -487,14 +506,8 @@ impl View for TopBar {
         match (self.hot_at(x, y), button) {
             (Some(Hot::Launcher), Button::Left) => popup::toggle_launcher(),
             (Some(Hot::Overview), Button::Left) => popup::toggle_overview(),
-            // The active pill opens the overview; another one switches to it.
-            (Some(Hot::Workspace(ws)), Button::Left) if ws == self.workspaces.0 => popup::toggle_overview(),
             (Some(Hot::Workspace(ws)), Button::Left) => {
-                let focus = self.model.borrow_mut().switch_workspace(self.monitor, ws);
-                if let Some(hwnd) = focus {
-                    crate::app::focus_later(hwnd);
-                }
-                crate::app::notify_model();
+                crate::platform::virtual_desktops::switch(ws);
             }
             (Some(Hot::Chevron), Button::Left) => {
                 if let Some(chevron) = self.chevron {
@@ -529,6 +542,20 @@ impl View for TopBar {
             }
             tray_strip::TIMER_TIP => self.tray.timer(id),
             _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn controls_have_equal_vertical_margins_at_each_dpi() {
+        for (height, scale) in [(30.0, 1.0), (38.0, 1.25), (45.0, 1.5), (60.0, 2.0), (4.0, 1.0)] {
+            let (top, bottom) = vertical_bounds(height, scale);
+            assert!((top - (content_height(height, scale) - bottom)).abs() < 0.001);
+            assert!(top >= 0.0 && bottom >= top && bottom <= height);
         }
     }
 }

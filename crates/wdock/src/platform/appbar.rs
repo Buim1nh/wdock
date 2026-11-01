@@ -63,7 +63,7 @@ fn data(hwnd: HWND, edge: Edge, rect: RECT) -> APPBARDATA {
 
 fn set_pos(hwnd: HWND, edge: Edge, rect: RECT) {
     let mut d = data(hwnd, edge, rect);
-    unsafe {
+    crate::platform::tray_host::with_explorer_taskbar(|| unsafe {
         SHAppBarMessage(ABM_QUERYPOS, &mut d);
         if d.rc.right <= d.rc.left {
             // Explorer refused the position; `verify` deals with it.
@@ -77,23 +77,25 @@ fn set_pos(hwnd: HWND, edge: Edge, rect: RECT) {
             Edge::Bottom => d.rc.top = d.rc.bottom - thickness,
         }
         SHAppBarMessage(ABM_SETPOS, &mut d);
-    }
+    });
 }
 
 /// Reserves `rect` (screen pixels, along `edge` of its monitor) for `hwnd`.
 pub fn register(hwnd: HWND, edge: Edge, rect: RECT) {
     let mut d = data(hwnd, edge, rect);
-    if unsafe { SHAppBarMessage(ABM_NEW, &mut d) } == 0 {
+    let registered = crate::platform::tray_host::with_explorer_taskbar(|| unsafe { SHAppBarMessage(ABM_NEW, &mut d) }) != 0;
+    if !registered {
         log::warn!("AppBar registration refused (is explorer running?)");
-        return;
     }
     BARS.with_borrow_mut(|bars| bars.push(Bar { hwnd, edge, rect, failures: 0, replaced: None }));
-    set_pos(hwnd, edge, rect);
+    if registered {
+        set_pos(hwnd, edge, rect);
+    }
 }
 
 /// Explorer re-arranged appbars (another bar, a display change): claim again.
 pub fn position_changed(hwnd: HWND) {
-    if let Some((edge, rect)) = BARS.with_borrow(|bars| bars.iter().find(|b| b.hwnd == hwnd).map(|b| (b.edge, b.rect))) {
+    if let Some((edge, rect)) = BARS.with_borrow(|bars| bars.iter().find(|b| b.hwnd == hwnd && b.replaced.is_none()).map(|b| (b.edge, b.rect))) {
         set_pos(hwnd, edge, rect);
     }
 }
@@ -106,7 +108,7 @@ pub fn unregister(hwnd: HWND) {
     });
     if let Some(bar) = found {
         let mut d = data(hwnd, bar.edge, bar.rect);
-        unsafe { SHAppBarMessage(ABM_REMOVE, &mut d) };
+        crate::platform::tray_host::with_explorer_taskbar(|| unsafe { SHAppBarMessage(ABM_REMOVE, &mut d) });
         if let Some(original) = bar.replaced {
             set_work_area(original);
         }
@@ -157,31 +159,28 @@ pub fn verify() -> bool {
             update(hwnd, |bar| bar.failures = 0);
             continue;
         }
-        if replaced && failures == RETRIES {
-            log::warn!("explorer ignores the work area too; restarting explorer brings the strip back");
-            update(hwnd, |bar| bar.failures = RETRIES + 1);
-        }
         if replaced {
-            // Our own work area was overwritten (a display change, or explorer
-            // laying out again): take the strip once more, but do not keep
-            // checking. A stuck explorer can ignore the work area too, and
-            // fighting it on a timer would cost CPU for nothing; the next
-            // rebuild or full-screen exit tries again.
-            set_work_area(without_strip(edge, rect, work));
+            // Do not fight Explorer if it overwrites the fallback. Repeated
+            // work-area changes make maximized windows resize indefinitely.
+            log::warn!("work area fallback was overwritten; not applying it again");
         } else if failures < RETRIES {
             recheck = true;
             log::warn!("explorer is not reserving a bar's strip (work area {work:?}); registering again");
             let mut d = data(hwnd, edge, rect);
-            unsafe {
+            crate::platform::tray_host::with_explorer_taskbar(|| unsafe {
                 SHAppBarMessage(ABM_REMOVE, &mut d);
                 SHAppBarMessage(ABM_NEW, &mut d);
-            }
+            });
             set_pos(hwnd, edge, rect);
             update(hwnd, |bar| bar.failures = failures + 1);
         } else {
             log::warn!("explorer keeps ignoring a bar's strip; setting the work area to keep maximized windows clear");
-            set_work_area(without_strip(edge, rect, work));
+            // Unregister first so AppBar position notifications cannot make
+            // Explorer and our fallback repeatedly overwrite one another.
             update(hwnd, |bar| bar.replaced = Some(work));
+            let mut d = data(hwnd, edge, rect);
+            crate::platform::tray_host::with_explorer_taskbar(|| unsafe { SHAppBarMessage(ABM_REMOVE, &mut d) });
+            set_work_area(without_strip(edge, rect, work));
             recheck = true;
         }
     }

@@ -45,6 +45,7 @@ use crate::platform::monitors::{self, Monitor};
 use crate::platform::tray_host::{self, TrayEvent, TrayHost, WM_APP_TRAY};
 use crate::platform::winevents::{self, WM_APP_WINEVENTS};
 use crate::platform::wininfo;
+use crate::platform::virtual_desktops;
 use crate::services::apps_index::{self, WM_APP_INDEX};
 use crate::services::media::{self, WM_APP_MEDIA};
 use crate::services::privacy::{self, WM_APP_PRIVACY};
@@ -69,6 +70,8 @@ const WM_APP_NOTIFY: u32 = WM_APP + 4;
 const WM_APP_FULLSCREEN: u32 = WM_APP + 5;
 /// The settings panel saved a key to config.toml: reload it and rebuild.
 const WM_APP_CONFIG: u32 = WM_APP + 24;
+const WM_APP_ISLAND_APPEARANCE: u32 = WM_APP + 25;
+const WM_APP_LYRICS: u32 = WM_APP + 26;
 const TIMER_REBUILD: usize = 1;
 const TIMER_FOCUS: usize = 2;
 const TIMER_RECLAIM: usize = 3;
@@ -110,6 +113,12 @@ pub fn notify_model() {
     post_main(WM_APP_NOTIFY);
 }
 
+/// Repaint island views when externally supplied lyrics or background change.
+pub fn notify_lyrics() {
+    post_main(WM_APP_LYRICS);
+}
+
+
 /// Checks the bars' reserved strips shortly (explorer applies them asynchronously).
 fn check_appbars_later() {
     unsafe { SetTimer(Some(main_hwnd()), TIMER_APPBAR, APPBAR_CHECK_MS, None) };
@@ -118,6 +127,11 @@ fn check_appbars_later() {
 /// Reloads config.toml and rebuilds the bars (called after the settings panel saves).
 pub fn reload_config() {
     post_main(WM_APP_CONFIG);
+}
+
+/// Applies island appearance and tab order without rebuilding the AppBars.
+pub fn reload_island_appearance() {
+    post_main(WM_APP_ISLAND_APPEARANCE);
 }
 
 /// Re-evaluates game mode soon (from an AppBar notification).
@@ -205,6 +219,8 @@ impl Shell {
         let theme = Rc::new(Theme::resolve(&self.config.appearance));
 
         let monitors = monitors::enumerate();
+        let max_scale = monitors.iter().map(|m| m.scale).fold(1.0, f32::max);
+        self.model.borrow_mut().set_icon_size(self.config.dock.icon_source_size(max_scale));
         if let Some(primary) = monitors.iter().find(|m| m.primary).or(monitors.first()) {
             popup::set_context(Some(PopupContext {
                 gfx: gfx.clone(),
@@ -230,7 +246,7 @@ impl Shell {
                 }
             }
             if self.config.island.enabled && in_scope(self.config.topbar.monitors, monitor) {
-                match island::create(&gfx, &theme, &self.config.island, monitor) {
+                match island::create(&gfx, &theme, &self.config.island, monitor, self.config.topbar.height) {
                     Ok(hwnd) => self.bars.push((hwnd, monitor.handle)),
                     Err(err) => log::error!("failed to create island: {err}"),
                 }
@@ -297,7 +313,7 @@ impl Shell {
             activate: false,
         };
         let tray = monitor.primary.then(|| self.config.tray.clone());
-        let view = TopBar::new(&self.config.topbar, tray, self.model.clone(), monitor.handle, monitor.scale);
+        let view = TopBar::new(&self.config.topbar, tray, self.model.clone(), monitor.scale);
         bar::create(gfx.clone(), theme.clone(), spec, Box::new(view))
     }
 
@@ -361,6 +377,7 @@ pub fn run(mode: Mode) -> Result<()> {
         log::warn!("could not set per-monitor DPI awareness: {err}");
     }
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE).ok()? };
+    unsafe { windows::Win32::System::Ole::OleInitialize(None)? };
 
     let hwnd = create_main_window()?;
     MAIN_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
@@ -376,13 +393,12 @@ pub fn run(mode: Mode) -> Result<()> {
     register_hotkeys(hwnd)?;
     window_model::restore_orphans();
     let max_scale = monitors::enumerate().iter().map(|m| m.scale).fold(1.0, f32::max);
-    let pinned = pins::load().unwrap_or_else(|| config.dock.pinned.clone());
+    let pinned = pins::load_or_import(&config.dock.pinned);
     // Magnified icons are drawn from the same bitmap, so load it at full size.
-    let icon_scale = max_scale * config.dock.magnification.max(1.0);
     let model = Rc::new(RefCell::new(WindowModel::new(
         &pinned,
-        (config.dock.icon_size * icon_scale).round() as u32,
-        config.workspaces.count,
+        config.dock.icon_source_size(max_scale),
+        1,
     )));
     // Install hooks before scanning so no window slips through in between.
     let _hooks = winevents::install(hwnd);
@@ -394,7 +410,6 @@ pub fn run(mode: Mode) -> Result<()> {
     // Before the tray exists: switching on auto-hide re-orders explorer's
     // taskbar to the top, and our tray must end up above it.
     explorer::hide_taskbar();
-    let tray = TrayHost::create(hwnd).inspect_err(|err| log::error!("tray host failed: {err}")).ok();
     services::start(hwnd);
     apps_index::start(hwnd);
     if config.island.enabled {
@@ -402,12 +417,17 @@ pub fn run(mode: Mode) -> Result<()> {
         privacy::start(hwnd);
     }
     model.borrow_mut().scan();
+    virtual_desktops::start(hwnd);
 
     SHELL.with_borrow_mut(|shell| {
         shell
             .insert(Shell { config, model, gfx: None, bars: Vec::new(), pending_device_lost: false, fullscreen: None })
             .rebuild();
     });
+    // Register appbars while Explorer's real Shell_TrayWnd is still the
+    // shell API's target. Forwarding appbar IPC through our tray window can
+    // lose the shared-memory reply used for position negotiation.
+    let tray = TrayHost::create(hwnd).inspect_err(|err| log::error!("tray host failed: {err}")).ok();
     unsafe { SetTimer(Some(hwnd), TIMER_RECLAIM, RECLAIM_DELAY_MS, None) };
     log::info!("shell ready ({mode:?}); Ctrl+Alt+Shift+Q exits");
 
@@ -434,6 +454,7 @@ pub fn run(mode: Mode) -> Result<()> {
     explorer::restore_taskbar();
     // Hand tray icons back to explorer's taskbar.
     drop(tray);
+    unsafe { windows::Win32::System::Ole::OleUninitialize(); }
     Ok(())
 }
 
@@ -516,6 +537,17 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 
     match msg {
+        crate::platform::tray_preferences::WM_TRAY_PREFERENCES => {
+            let prefs = crate::platform::tray_preferences::load();
+            tray_host::with_tray(|tray| tray.set_windows_preferences(prefs));
+            with_shell(|shell| shell.notify_bars());
+            LRESULT(0)
+        }
+        virtual_desktops::WM_DESKTOP_CHANGED => {
+            virtual_desktops::refresh();
+            with_shell(|shell| shell.notify_bars());
+            LRESULT(0)
+        }
         WM_APP_WINEVENTS => {
             let events = winevents::drain();
             let moved = !events.is_empty();
@@ -544,6 +576,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
         WM_APP_MEDIA => {
             island::media_changed();
+            LRESULT(0)
+        }
+        WM_APP_LYRICS => {
+            island::lyrics_changed();
             LRESULT(0)
         }
         WM_APP_PRIVACY => {
@@ -605,6 +641,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
         WM_APP_CONFIG => {
             with_shell(|shell| shell.reload_config(hwnd));
+            LRESULT(0)
+        }
+        WM_APP_ISLAND_APPEARANCE => {
+            with_shell(|shell| {
+                let updated = config::load().island;
+                shell.config.island.widget_order = updated.widget_order;
+                shell.config.island.style = updated.style;
+                shell.config.island.notch_width = updated.notch_width;
+                island::refresh_appearance();
+            });
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_APPBAR => {
