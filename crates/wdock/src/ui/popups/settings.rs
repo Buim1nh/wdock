@@ -33,6 +33,8 @@ enum Setting {
     Theme,
     Backdrop,
     Font,
+    WindowsFont,
+    WindowsFontRestore,
     TopBars,
     AutoHide,
     DockHover,
@@ -49,10 +51,12 @@ enum Setting {
     OpenFile,
 }
 
-const ROWS: [(Setting, &str); 17] = [
+const ROWS: [(Setting, &str); 19] = [
     (Setting::Theme, "Theme"),
     (Setting::Backdrop, "Backdrop"),
     (Setting::Font, "Font"),
+    (Setting::WindowsFont, "Use font in Windows"),
+    (Setting::WindowsFontRestore, "Windows default font"),
     (Setting::TopBars, "Top bar on"),
     (Setting::AutoHide, "Dock auto-hide"),
     (Setting::DockHover, "Dock hover"),
@@ -68,6 +72,23 @@ const ROWS: [(Setting, &str); 17] = [
     (Setting::SignIn, "Start at sign-in"),
     (Setting::OpenFile, "Open config file"),
 ];
+
+const WINDOWS_FONT_SCRIPT: &str = include_str!("../../../../../scripts/windows-font.ps1");
+
+/// Folder `windows-font.ps1` installs missing fonts from (install.ps1 fills it).
+pub fn font_dir() -> std::path::PathBuf {
+    crate::paths::local_dir().join("fonts")
+}
+
+fn windows_font_arguments(config: &Config, restore: bool) -> String {
+    if restore {
+        return "-Restore".into();
+    }
+    let family = config.appearance.font.trim();
+    let family = if family.is_empty() { "auto" } else { family };
+    format!("-Family {} -FontDir {}", launch::powershell_quote(family),
+        launch::powershell_quote(&font_dir().display().to_string()))
+}
 
 /// The next installed family in the settings cycle after `current`.
 fn next_font(current: &str) -> &'static str {
@@ -100,6 +121,8 @@ impl Setting {
             } else {
                 config.appearance.font.trim().to_owned()
             },
+            Self::WindowsFont => "Apply (admin)",
+            Self::WindowsFontRestore => "Restore (admin)",
             Self::TopBars => match config.topbar.monitors {
                 MonitorScope::All => "All monitors",
                 MonitorScope::Primary => "Primary only",
@@ -194,6 +217,8 @@ impl Setting {
             }
             Self::SignIn => Change::SignIn(!sign_in),
             Self::OpenFile => Change::OpenFile,
+            Self::WindowsFont => Change::WindowsFont { restore: false },
+            Self::WindowsFontRestore => Change::WindowsFont { restore: true },
         }
     }
 }
@@ -218,6 +243,7 @@ enum Change {
     Key(&'static str, &'static str, String),
     SignIn(bool),
     OpenFile,
+    WindowsFont { restore: bool },
 }
 
 pub struct SettingsView {
@@ -458,6 +484,11 @@ impl View for SettingsView {
                 bar::close(self.hwnd);
                 false
             }
+            Change::WindowsFont { restore } => {
+                launch::powershell_elevated(WINDOWS_FONT_SCRIPT, &windows_font_arguments(&self.config, restore));
+                bar::close(self.hwnd);
+                false
+            }
         }
     }
 
@@ -470,6 +501,16 @@ impl View for SettingsView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_font_rows_pass_the_configured_family() {
+        let mut config = Config::default();
+        assert!(windows_font_arguments(&config, false).starts_with("-Family 'auto' -FontDir '"));
+        config.appearance.font = "SF Pro".into();
+        assert!(windows_font_arguments(&config, false).starts_with("-Family 'SF Pro' "));
+        assert_eq!(windows_font_arguments(&config, true), "-Restore");
+        assert!(matches!(Setting::WindowsFontRestore.change(&config, false, 1), Change::WindowsFont { restore: true }));
+    }
 
     #[test]
     fn font_row_cycles_installed_families() {

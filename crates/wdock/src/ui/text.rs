@@ -30,11 +30,10 @@ thread_local! {
 
 /// Applies `[appearance] font`; text formats created afterwards use it.
 pub fn set_ui_font(setting: &str) {
+    // Always re-resolve: the family may have been installed since.
     UI_FONT_SETTING.with_borrow_mut(|(current, resolved)| {
-        if current != setting {
-            *current = setting.to_owned();
-            *resolved = None;
-        }
+        setting.clone_into(current);
+        *resolved = None;
     });
 }
 
