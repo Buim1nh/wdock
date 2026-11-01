@@ -80,9 +80,7 @@ Viên thuốc ở giữa đỉnh mỗi màn hình, rê chuột vào thì mở r�
 - **Kiểu và thao tác:** trong wdock settings, chọn **Island style** để chuyển giữa Island và Notch; dùng **Notch width** để chỉnh độ rộng khi thu gọn. Cuộn ngang trên bảng mở rộng để đổi tab. Cuộn lên trên hàng tab để thu gọn, cuộn xuống trên notch hoặc island thu gọn để mở lại. Cuộn dọc trong Files vẫn dùng để xem danh sách tệp.
 - **Files:** kéo file hoặc thư mục từ Explorer vào Island; kéo một mục ra ứng dụng tương thích, bấm để mở, hoặc bấm × để bỏ tham chiếu. Cuộn chuột để xem thêm. Khay lưu tối đa 32 đường dẫn, không sao chép nội dung; nếu file gốc bị xóa hoặc chuyển đi thì tham chiếu có thể không còn dùng được.
 - **Đang phát:** dùng được với mọi app có điều khiển media của Windows (Spotify, trình duyệt, trình phát nhạc).
-Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
-Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
-Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
+- **Lyrics:** tab Lyrics nhận lời đang hiển thị từ Spicy Lyrics hoặc Lyrics Plus qua bridge Spicetify trên máy này (chỉ qua loopback).
   - Tên bài, ca sĩ, play/pause, bài trước/sau và thanh tiến độ kéo tua được.
   - Hiện ảnh bìa nếu app cung cấp. Nhiều trang web không có ảnh bìa (trình duyệt chỉ chuyển tiếp những gì trang khai báo), khi đó island hiện biểu tượng app đang phát, và khi mở rộng thì hiện khung hình trực tiếp của cửa sổ đang phát.
   - Equalizer chuyển động khi đang phát. Bộ dựng hình của Windows (DWM) tự chạy hoạt ảnh này, nên wdock không tốn công cho từng khung hình.
@@ -217,12 +215,14 @@ File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động 
 
 | Mục | Thiết lập chính |
 |---|---|
-| `[appearance]` | `theme` = `"auto"`, `"dark"` hoặc `"light"`; `backdrop` = `"acrylic"` hoặc `"solid"` |
+| `[appearance]` | `theme` = `"auto"`, `"dark"` hoặc `"light"`; `backdrop` = `"acrylic"` hoặc `"solid"`; `font` = `"auto"` (SF Pro nếu đã cài, không thì Segoe UI Variable) hoặc tên bất kỳ font đã cài |
 | `[performance]` | `renderer` = `"software"` (WARP, khoảng 10 MB, không đánh thức GPU rời) hoặc `"gpu"` |
 | `[topbar]` | `height` (30), `monitors` (`"all"` hoặc `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible`: số icon trước nút tràn (12); `overflow`: các tên file chạy luôn bị đưa vào phần tràn |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` hoặc `"glass"`), `hover_size` tùy chọn, `magnification` cũ (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
 | `[island]` | `enabled`, `file_shelf`, `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
+
+Để Windows cũng dùng font đó, mở wdock settings và bấm **Use font in Windows** (cần quyền admin; đăng xuất rồi đăng nhập lại để áp dụng). wdock thay các họ font Segoe UI và cài trước các file `.ttf`/`.otf` còn thiếu trong `%LOCALAPPDATA%\wdock\fonts`. **Windows default font** trả lại như cũ. SF Pro không được đóng gói sẵn vì Apple không cho phép phân phối lại; xem `fonts\README.md`.
 
 Khi chưa có danh sách ghim riêng, wdock nhập các app từ taskbar Windows theo thứ tự và sao chép shortcut vào thư mục dữ liệu của mình. Các thay đổi sau đó chỉ lưu vào `%LOCALAPPDATA%\wdock\pinned.txt`, không sửa taskbar Windows. Nếu nhập thất bại, wdock tạm dùng danh sách trong cấu hình và thử lại lần khởi động sau. Giao diện Windows dùng để nhập chưa được Microsoft công bố.
 

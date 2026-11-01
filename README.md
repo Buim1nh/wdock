@@ -78,8 +78,6 @@ The expanded Island has Media and Files tabs. In wdock settings, enable or disab
 
 Lyrics requires the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view. The bridge sends displayed lyrics to WDock over loopback.
 
-Lyrics requires the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view. The bridge sends displayed lyrics to WDock over loopback.
-
 Choose **Island style** in wdock settings for a floating Island or a top-edge Notch; **Notch width** adjusts its compact width. Scroll horizontally over the expanded panel to switch tabs. Scroll up over the tab row to collapse it, then scroll down over the compact shape to reopen it. Vertical scrolling over Files still scrolls the file list.
 
 - **Files:** drag files or folders from Explorer onto the Island, then drag an entry out to a compatible app, click it to open, or use × to remove its reference. Scroll the list if needed. The shelf stores up to 32 paths, not file contents; moving or deleting the original can make a reference unavailable.
@@ -221,12 +219,14 @@ The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a
 
 | Section | Main settings |
 |---|---|
-| `[appearance]` | `theme` = `"auto"`, `"dark"` or `"light"`; `backdrop` = `"acrylic"` or `"solid"` |
+| `[appearance]` | `theme` = `"auto"`, `"dark"` or `"light"`; `backdrop` = `"acrylic"` or `"solid"`; `font` = `"auto"` (SF Pro when installed, else Segoe UI Variable) or any installed family |
 | `[performance]` | `renderer` = `"software"` (WARP, about 10 MB, never wakes a discrete GPU) or `"gpu"` |
 | `[topbar]` | `height` (30), `monitors` (`"all"` or `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible` icons before the overflow chevron (12), `overflow` executable fragments always hidden |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` or `"glass"`), optional `hover_size`, legacy `magnification` (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
 | `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
+
+To use the font in Windows itself, open wdock settings and click **Use font in Windows** (asks for administrator rights; sign out and back in to apply). It substitutes the Segoe UI families and installs missing `.ttf`/`.otf` files from `%LOCALAPPDATA%\wdock\fonts` first. **Windows default font** undoes it. SF Pro is not bundled because Apple does not allow redistribution; see `fonts\README.md`.
 
 When no wdock pin list exists, wdock imports Windows taskbar pins in order and copies their shortcuts to its own data directory. Subsequent changes are saved only to `%LOCALAPPDATA%\wdock\pinned.txt`; they do not change Windows taskbar pins. If import fails, the configuration list is used temporarily and import is retried at the next start. The Windows interface used for the import is undocumented.
 
