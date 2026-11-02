@@ -5,7 +5,7 @@
 wdock là bộ top bar, dock và Dynamic Island kiểu macOS cho Windows 11, viết bằng Rust.
 
 - Mục tiêu tài nguyên: RAM dưới 25 MB, CPU gần 0% khi rảnh, 0% khi đang chơi game.
-- Không inject code vào tiến trình khác, không dùng keyboard hook, không tự gọi mạng, nên an toàn khi chạy cùng anti-cheat.
+- Không inject code vào tiến trình khác, không dùng keyboard hook, không tự gọi mạng (bridge lời bài hát tùy chọn chỉ lắng nghe trên `127.0.0.1`), nên an toàn khi chạy cùng anti-cheat.
 - Chạy song song với explorer chứ không thay thế nó. Các tính năng của Windows vẫn hoạt động, và thoát wdock thì taskbar bình thường quay lại.
 
 [![Video demo wdock](docs/media/demo.gif)](docs/media/demo.mp4)
@@ -80,7 +80,13 @@ Viên thuốc ở giữa đỉnh mỗi màn hình, rê chuột vào thì mở r�
 - **Kiểu và thao tác:** trong wdock settings, chọn **Island style** để chuyển giữa Island và Notch; dùng **Notch width** để chỉnh độ rộng khi thu gọn. Cuộn ngang trên bảng mở rộng để đổi tab. Cuộn lên trên hàng tab để thu gọn, cuộn xuống trên notch hoặc island thu gọn để mở lại. Cuộn dọc trong Files vẫn dùng để xem danh sách tệp.
 - **Files:** kéo file hoặc thư mục từ Explorer vào Island; kéo một mục ra ứng dụng tương thích, bấm để mở, hoặc bấm × để bỏ tham chiếu. Cuộn chuột để xem thêm. Khay lưu tối đa 32 đường dẫn, không sao chép nội dung; nếu file gốc bị xóa hoặc chuyển đi thì tham chiếu có thể không còn dùng được.
 - **Đang phát:** dùng được với mọi app có điều khiển media của Windows (Spotify, trình duyệt, trình phát nhạc).
-- **Lyrics:** tab Lyrics nhận lời đang hiển thị từ Spicy Lyrics hoặc Lyrics Plus qua bridge Spicetify trên máy này (chỉ qua loopback).
+- **Lyrics:** lời bài hát đồng bộ cho Spotify. Cần companion Spicetify và đang mở Spicy Lyrics hoặc Lyrics Plus; bridge gửi lời đang hiển thị cho wdock qua loopback (`127.0.0.1:43179`, chỉ nhận từ client Spotify). Cài bằng:
+
+  ```bash
+  powershell -ExecutionPolicy Bypass -File extensions\spicetify\install.ps1
+  ```
+
+  Script cần Spicetify ở `%LOCALAPPDATA%\spicetify` và không ghi đè file lạ. Tắt nền chuyển động của lời bài hát bằng **Lyrics background motion** trong cài đặt wdock.
   - Tên bài, ca sĩ, play/pause, bài trước/sau và thanh tiến độ kéo tua được.
   - Hiện ảnh bìa nếu app cung cấp. Nhiều trang web không có ảnh bìa (trình duyệt chỉ chuyển tiếp những gì trang khai báo), khi đó island hiện biểu tượng app đang phát, và khi mở rộng thì hiện khung hình trực tiếp của cửa sổ đang phát.
   - Equalizer chuyển động khi đang phát. Bộ dựng hình của Windows (DWM) tự chạy hoạt ảnh này, nên wdock không tốn công cho từng khung hình.
@@ -192,14 +198,16 @@ Cần thoát wdock trước khi cài đè.
 | Win+Alt+Space | Launcher |
 | Ctrl+Alt+Shift+Q | Thoát wdock, trả lại taskbar của explorer |
 
-Nếu Win+Alt+Space đã bị app khác chiếm, wdock ghi vào log và launcher vẫn mở bằng nút trên top bar. Workspace và Overview dùng chuột.
+Nếu Win+Alt+Space đã bị app khác chiếm, wdock ghi vào log và launcher vẫn mở bằng nút trên top bar. Virtual desktop và Overview dùng chuột.
 
 ## Tùy chỉnh
 
 Thay đổi tùy chọn không cần chạy lại trình cài đặt. Bấm vào các icon trạng thái trên top bar, rồi chọn **Cài đặt wdock**. Panel này chỉnh được:
 
 - giao diện, nền (backdrop), top bar trên tất cả màn hình hoặc chỉ màn hình chính
-- tự ẩn dock, Dynamic Island, hiệu ứng equalizer và các widget của Island
+- font (kèm **Use font in Windows** / **Windows default font**)
+- tự ẩn dock, hiệu ứng hover (magnify hoặc glass), kích thước icon và kích thước khi hover
+- Dynamic Island bật/tắt, kiểu (Island hoặc Notch) và độ rộng notch, hiệu ứng equalizer, nền chuyển động của lời bài hát, kệ file và thứ tự tab
 - khởi động cùng Windows (một tác vụ theo người dùng tên `wdock`, cùng tác vụ mà trình cài đặt tạo)
 
 Mỗi thay đổi được lưu vào `config.toml` (giữ nguyên chú thích và các khóa khác) và áp dụng ngay. **Mở file cấu hình** mở file trong trình soạn thảo mặc định, để chỉnh các khóa khác.
@@ -220,7 +228,7 @@ File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động 
 | `[topbar]` | `height` (30), `monitors` (`"all"` hoặc `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible`: số icon trước nút tràn (12); `overflow`: các tên file chạy luôn bị đưa vào phần tràn |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` hoặc `"glass"`), `hover_size` tùy chọn, `magnification` cũ (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
-| `[island]` | `enabled`, `file_shelf`, `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
+| `[island]` | `enabled`, `style` (`"island"` hoặc `"notch"`), `notch_width` (200), `lyrics_background_motion`, `file_shelf`, `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
 
 Để Windows cũng dùng font đó, mở wdock settings và bấm **Use font in Windows** (cần quyền admin; đăng xuất rồi đăng nhập lại để áp dụng). wdock thay các họ font Segoe UI và cài trước các file `.ttf`/`.otf` còn thiếu trong `%LOCALAPPDATA%\wdock\fonts`. **Windows default font** trả lại như cũ. SF Pro không được đóng gói sẵn vì Apple không cho phép phân phối lại; xem `fonts\README.md`.
 
@@ -286,8 +294,10 @@ Mã nguồn nằm trong `crates/wdock/src`:
 | `app.rs` | vòng lặp message, hai phím tắt, game mode, kiểm tra AppBar |
 | `ui/` | các thanh Direct2D, dock, island, popup, lớp composition |
 | `platform/` | lớp bọc Win32, tray host, AppBar, sự kiện cửa sổ |
-| `services/` | âm thanh, mạng và Wi-Fi, nguồn, độ sáng, phiên media, chỉ mục app, icon |
-| `model/` | cấu hình, cửa sổ, khay, tìm kiếm, Pomodoro |
+| `services/` | âm thanh, mạng và Wi-Fi, nguồn, độ sáng, phiên media, bridge lời bài hát, chỉ mục app, icon |
+| `model/` | cấu hình, cửa sổ, khay, pin, tìm kiếm, Pomodoro, kệ file của Island |
+
+Ngoài crate: `crates/wdock-setup` (trình cài đặt), `extensions/` (bridge lời bài hát cho Spicetify và extension trình duyệt WDock Lyrics), `scripts/` (cài, gỡ, font Windows). Agent lập trình nên đọc [AGENTS.md](AGENTS.md) trước.
 
 ## Kết quả đo
 

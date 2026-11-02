@@ -5,7 +5,7 @@
 wdock is a macOS-style top bar, dock and Dynamic Island for Windows 11, written in Rust.
 
 - Resource targets: under 25 MB of RAM, close to 0% CPU when idle, and 0% while a game is running.
-- It injects no code into other processes, uses no keyboard hooks and makes no network calls, so it is safe next to anti-cheat software.
+- It injects no code into other processes, uses no keyboard hooks and makes no network calls (the optional lyrics bridge only listens on `127.0.0.1`), so it is safe next to anti-cheat software.
 - It runs on top of explorer instead of replacing it, so Windows features keep working and quitting wdock brings the normal taskbar back.
 
 [![wdock demo](docs/media/demo.gif)](docs/media/demo.mp4)
@@ -74,15 +74,21 @@ All screenshots are 1920×1080.
 
 ### Dynamic Island
 
+A pill at the top centre of each monitor that expands on hover.
+
 The expanded Island has Media and Files tabs. In wdock settings, enable or disable **Island file shelf** and use **Order (M/F)** to change their order. Media includes the Pomodoro controls.
 
-Lyrics requires the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view. The bridge sends displayed lyrics to WDock over loopback.
+- **Lyrics:** synced lyrics for Spotify, shown in the expanded Island. This needs the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view; the bridge sends the displayed lyrics to wdock over loopback (`127.0.0.1:43179`, accepted only from the Spotify client). Install it with:
+
+  ```bash
+  powershell -ExecutionPolicy Bypass -File extensions\spicetify\install.ps1
+  ```
+
+  The script needs Spicetify in `%LOCALAPPDATA%\spicetify` and refuses to overwrite an unrecognized file. **Lyrics background motion** in wdock settings turns the animated background off.
 
 Choose **Island style** in wdock settings for a floating Island or a top-edge Notch; **Notch width** adjusts its compact width. Scroll horizontally over the expanded panel to switch tabs. Scroll up over the tab row to collapse it, then scroll down over the compact shape to reopen it. Vertical scrolling over Files still scrolls the file list.
 
 - **Files:** drag files or folders from Explorer onto the Island, then drag an entry out to a compatible app, click it to open, or use × to remove its reference. Scroll the list if needed. The shelf stores up to 32 paths, not file contents; moving or deleting the original can make a reference unavailable.
-
-A pill at the top centre of each monitor that expands on hover.
 
 - **Now playing**, for any app that shows Windows' media controls (Spotify, browsers, media players):
   - Title, artist, play/pause, previous/next and a seekable progress bar.
@@ -196,19 +202,20 @@ Quit wdock before installing over a running copy.
 | Win+Alt+Space | Launcher |
 | Ctrl+Alt+Shift+Q | Quit wdock and bring explorer's taskbar back |
 
-If another app already owns Win+Alt+Space, wdock logs it and the launcher stays on the top bar button. Workspaces and the overview are reached with the mouse.
+If another app already owns Win+Alt+Space, wdock logs it and the launcher stays on the top bar button. Virtual desktops and the overview are reached with the mouse.
 
 ## Settings
 
 Changing options does not need the setup again. Click the status icons in the top bar, then **wdock settings**. The panel changes:
 
-- theme, backdrop, top bar on all monitors or only the primary one
-- dock auto-hide, Dynamic Island, animated equalizer
+- theme, backdrop, font (and **Use font in Windows** / **Windows default font**), top bar on all monitors or only the primary one
+- dock auto-hide, hover effect (magnify or glass), icon size and hover size
+- Dynamic Island on/off, style (Island or Notch) and notch width, animated equalizer, lyrics background motion, file shelf and tab order
 - start at sign-in (a per-user scheduled task named `wdock`, the same one the setup creates)
 
 Each change is saved to `config.toml` (comments and other keys are kept) and applies at once. **Open config file** opens the file in your default editor for the other keys.
 
-Keys that are not in the panel (for example `[dock] icon_size`) still need a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
+Keys that are not in the panel (for example `[topbar] height`) still need a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
 
 ## Configuration
 
@@ -224,7 +231,7 @@ The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a
 | `[topbar]` | `height` (30), `monitors` (`"all"` or `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible` icons before the overflow chevron (12), `overflow` executable fragments always hidden |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` or `"glass"`), optional `hover_size`, legacy `magnification` (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
-| `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
+| `[island]` | `enabled` (true), `style` (`"island"` or `"notch"`), `notch_width` (200), `file_shelf` (true), `widget_order` (`["media", "files"]`), `lyrics_background_motion` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
 
 To use the font in Windows itself, open wdock settings and click **Use font in Windows** (asks for administrator rights; sign out and back in to apply). It substitutes the Segoe UI families and installs missing `.ttf`/`.otf` files from `%LOCALAPPDATA%\wdock\fonts` first. **Windows default font** undoes it. SF Pro is not bundled because Apple does not allow redistribution; see `fonts\README.md`.
 
@@ -288,8 +295,10 @@ The source is in `crates/wdock/src`:
 | `app.rs` | message loop, the two hotkeys, game mode, AppBar checks |
 | `ui/` | Direct2D bars, the dock, the island, popups, composition layers |
 | `platform/` | Win32 wrappers, the tray host, AppBars, window events |
-| `services/` | audio, network and Wi-Fi, power, brightness, media session, app index, icons |
-| `model/` | configuration, windows, tray, search, Pomodoro |
+| `services/` | audio, network and Wi-Fi, power, brightness, media session, lyrics bridge, app index, icons |
+| `model/` | configuration, windows, tray, pins, search, Pomodoro, island file shelf |
+
+Outside the crate: `crates/wdock-setup` (installer), `extensions/` (Spicetify lyrics bridge and the WDock Lyrics browser extension), `scripts/` (install, uninstall, Windows font). Coding agents should read [AGENTS.md](AGENTS.md) first.
 
 ## Measurements
 
