@@ -11,3 +11,5 @@ pub mod island_drag;
 pub mod winevents;
 pub mod wininfo;
 pub mod virtual_desktops;
+
+pub mod camera;

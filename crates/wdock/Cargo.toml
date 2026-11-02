@@ -38,6 +38,8 @@ features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
+    "Win32_Media_DirectShow",
+    "Win32_Media_MediaFoundation",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     "Win32_NetworkManagement_IpHelper",
