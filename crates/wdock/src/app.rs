@@ -81,8 +81,6 @@ const TIMER_APPBAR: usize = 5;
 const TIMER_FULLSCREEN_CHECK: usize = 6;
 /// Explorer applies a reservation asynchronously; check it this long after.
 const APPBAR_CHECK_MS: u32 = 1500;
-/// Extra clearance for DWM's visible title-bar frame below the top bar.
-const TOPBAR_CLEARANCE_PX: i32 = 4;
 /// Some apps (Steam) ignore a TaskbarCreated that arrives soon after another
 /// one, e.g. ours at start right after explorer's or a previous wdock's.
 /// One more broadcast a little later catches them; duplicate adds are refused.
@@ -244,7 +242,7 @@ impl Shell {
                         self.bars.push((hwnd, monitor.handle));
                         // Explorer keeps maximized windows below the top bar.
                         let height = (self.config.topbar.height * monitor.scale).round() as i32;
-                        let reserved = RECT { bottom: m.top + height + TOPBAR_CLEARANCE_PX, ..m };
+                        let reserved = RECT { bottom: m.top + height, ..m };
                         appbar::register(hwnd, Edge::Top, reserved);
                     }
                     Err(err) => log::error!("failed to create top bar: {err}"),
