@@ -184,6 +184,8 @@ struct Shell {
     gfx: Option<Rc<Gfx>>,
     /// Every bar window with the monitor it sits on.
     bars: Vec<(HWND, HMONITOR)>,
+    /// Top-bar strips used to keep a foreground window from extending behind them.
+    topbar_strips: Vec<(RECT, i32)>,
     pending_device_lost: bool,
     /// The monitor whose bars are hidden under a full-screen app (game mode).
     fullscreen: Option<HMONITOR>,
@@ -243,6 +245,7 @@ impl Shell {
                         // Explorer keeps maximized windows below the top bar.
                         let height = (self.config.topbar.height * monitor.scale).round() as i32;
                         let reserved = RECT { bottom: m.top + height, ..m };
+                        self.topbar_strips.push((reserved, m.bottom));
                         appbar::register(hwnd, Edge::Top, reserved);
                     }
                     Err(err) => log::error!("failed to create top bar: {err}"),
@@ -280,6 +283,9 @@ impl Shell {
     fn update_fullscreen(&mut self) {
         let foreground = unsafe { GetForegroundWindow() };
         let monitor = wininfo::is_fullscreen_app(foreground).then(|| wininfo::monitor(foreground));
+        if monitor.is_none() {
+            self.keep_foreground_below_topbar(foreground);
+        }
         // Follow the foreground app's size changes, except in game mode: there
         // the location hook would wake us for every move inside the game, and
         // leaving full screen is announced by the shell hook and the AppBar
@@ -311,6 +317,27 @@ impl Shell {
         }
     }
 
+    fn keep_foreground_below_topbar(&self, foreground: HWND) {
+        if !wininfo::is_app_window(foreground) {
+            return;
+        }
+        let frame = wininfo::visible_rect(foreground);
+        let mut boundary = None::<i32>;
+        let mut monitor_bottom = None::<i32>;
+        for &(strip, screen_bottom) in &self.topbar_strips {
+            if frame.left >= strip.right || frame.right <= strip.left
+                || frame.top >= strip.bottom || frame.bottom <= strip.top {
+                continue;
+            }
+            boundary = Some(boundary.map_or(strip.bottom, |y| y.max(strip.bottom)));
+            monitor_bottom = Some(monitor_bottom.map_or(screen_bottom, |y| y.max(screen_bottom)));
+        }
+        if let (Some(top), Some(bottom)) = (boundary, monitor_bottom)
+            && wininfo::move_below_topbar(foreground, top, bottom) {
+                log::info!("moved foreground window below WDock's top bar");
+            }
+    }
+
     fn create_topbar(&self, gfx: &Rc<Gfx>, theme: &Rc<Theme>, monitor: &Monitor) -> Result<HWND> {
         let m = monitor.rect;
         let height = (self.config.topbar.height * monitor.scale).round() as i32;
@@ -326,6 +353,7 @@ impl Shell {
     }
 
     fn destroy_bars(&mut self) {
+        self.topbar_strips.clear();
         for (hwnd, _) in self.bars.drain(..) {
             appbar::unregister(hwnd);
             let _ = unsafe { DestroyWindow(hwnd) };
@@ -436,7 +464,7 @@ pub fn run(mode: Mode) -> Result<()> {
 
     SHELL.with_borrow_mut(|shell| {
         shell
-            .insert(Shell { config, model, gfx: None, bars: Vec::new(), pending_device_lost: false, fullscreen: None })
+            .insert(Shell { config, model, gfx: None, bars: Vec::new(), topbar_strips: Vec::new(), pending_device_lost: false, fullscreen: None })
             .rebuild();
     });
     // Register appbars while Explorer's real Shell_TrayWnd is still the

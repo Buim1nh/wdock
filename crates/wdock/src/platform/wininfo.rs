@@ -3,8 +3,8 @@
 
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::{CloseHandle, HWND};
-use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
@@ -18,8 +18,9 @@ use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyS
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GA_ROOT, GA_ROOTOWNER, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
     GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
-    SwitchToThisWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindowAsync,
+    SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SwitchToThisWindow, WS_EX_APPWINDOW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BSTR, HSTRING, PCWSTR, PWSTR, w};
 
@@ -292,6 +293,45 @@ pub fn rect(hwnd: HWND) -> windows::Win32::Foundation::RECT {
     let mut rect = Default::default();
     let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut rect) };
     rect
+}
+
+/// Visible frame bounds without the invisible resize border added to some
+/// maximized windows.
+pub fn visible_rect(hwnd: HWND) -> RECT {
+    let mut rect = RECT::default();
+    let result = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            (&mut rect as *mut RECT).cast(),
+            size_of::<RECT>() as u32,
+        )
+    };
+    if result.is_ok() { rect } else { self::rect(hwnd) }
+}
+
+/// Moves a window whose visible frame intrudes into WDock's top-bar strip so
+/// its top edge sits exactly below the bar. Keep the bottom edge on-screen.
+pub fn move_below_topbar(hwnd: HWND, top: i32, monitor_bottom: i32) -> bool {
+    let visible = visible_rect(hwnd);
+    let offset = top - visible.top;
+    if offset <= 0 { return false; }
+    let window = rect(hwnd);
+    let new_top = window.top + offset;
+    let bottom = window.bottom.min(monitor_bottom);
+    let height = bottom - new_top;
+    if height < 100 { return false; }
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            window.left,
+            new_top,
+            window.right - window.left,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        ).is_ok()
+    }
 }
 
 /// Covers its whole monitor without a caption: games and full-screen video.
