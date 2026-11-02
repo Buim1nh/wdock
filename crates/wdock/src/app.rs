@@ -29,7 +29,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DeregisterShellHookWindow, DestroyWindow, DispatchMessageW,
     GetForegroundWindow, GetMessageW, KillTimer, MSG, PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE,
     PostMessageW, PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SetTimer,
-    TranslateMessage, EVENT_SYSTEM_FOREGROUND, WM_APP, WM_DESTROY, WM_HOTKEY, WM_POWERBROADCAST,
+    TranslateMessage, EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, WM_APP, WM_DESTROY,
+    WM_HOTKEY, WM_POWERBROADCAST,
     WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
@@ -595,25 +596,29 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             let events = winevents::drain();
             let moved = !events.is_empty();
             let foreground_only = moved && events.iter().all(|(event, _)| *event == EVENT_SYSTEM_FOREGROUND);
+            let location_only = moved && events.iter().all(|(event, _)| *event == EVENT_OBJECT_LOCATIONCHANGE);
             // A rapid Alt+Tab sequence is only a foreground change. Shell
             // activation notifications already update full-screen state, so
             // skip taskbar enumeration and the duplicate fullscreen scan here.
-            if moved && !foreground_only {
+            // Location changes arrive continuously while a window is being
+            // dragged. Wait for EVENT_SYSTEM_MOVESIZEEND before repositioning
+            // it so Windows snap previews and sizing remain in control.
+            if moved && !foreground_only && !location_only {
                 enforce_hybrid();
             }
             with_shell(|shell| {
                 let windows_changed = shell.model.borrow_mut().apply(events);
-                if moved && !foreground_only {
+                if moved && !foreground_only && !location_only {
                     shell.update_fullscreen();
                 }
-                let tray_changed = if foreground_only {
+                let tray_changed = if foreground_only || location_only {
                     false
                 } else {
                     tray_host::with_tray(|tray| tray.prune()).unwrap_or(false)
                 };
                 // Any window event can change whether a window overlaps the
                 // dock (smart auto-hide), so bars always hear about it.
-                if windows_changed || tray_changed || moved {
+                if windows_changed || tray_changed || (moved && !location_only) {
                     if foreground_only {
                         shell.notify_foreground_bars();
                     } else {
