@@ -3,8 +3,8 @@
 
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::{CloseHandle, HWND};
-use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
@@ -292,6 +292,21 @@ pub fn rect(hwnd: HWND) -> windows::Win32::Foundation::RECT {
     let mut rect = Default::default();
     let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut rect) };
     rect
+}
+
+/// Visible frame bounds without the invisible resize border Windows adds to
+/// maximized windows. Useful when checking whether an app actually covers UI.
+pub fn visible_rect(hwnd: HWND) -> RECT {
+    let mut rect = RECT::default();
+    let result = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            (&mut rect as *mut RECT).cast(),
+            size_of::<RECT>() as u32,
+        )
+    };
+    if result.is_ok() { rect } else { self::rect(hwnd) }
 }
 
 /// Covers its whole monitor without a caption: games and full-screen video.
