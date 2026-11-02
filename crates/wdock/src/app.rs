@@ -29,7 +29,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DeregisterShellHookWindow, DestroyWindow, DispatchMessageW,
     GetForegroundWindow, GetMessageW, KillTimer, MSG, PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE,
     PostMessageW, PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SetTimer,
-    TranslateMessage, WM_APP, WM_DESTROY, WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
+    TranslateMessage, EVENT_SYSTEM_FOREGROUND, WM_APP, WM_DESTROY, WM_HOTKEY, WM_POWERBROADCAST,
+    WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{Result, w};
@@ -337,6 +338,13 @@ impl Shell {
         popup::notify();
     }
 
+    fn notify_foreground_bars(&self) {
+        for &(hwnd, _) in &self.bars {
+            bar::notify_foreground_changed(hwnd);
+        }
+        popup::notify_foreground_changed();
+    }
+
     /// Applies the saved config live. The settings panel is rebuilt with the
     /// bars (its popups are closed by `rebuild`), so it is reopened if it was open.
     fn reload_config(&mut self, hwnd: HWND) {
@@ -557,15 +565,31 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         WM_APP_WINEVENTS => {
             let events = winevents::drain();
             let moved = !events.is_empty();
-            enforce_hybrid();
+            let foreground_only = moved && events.iter().all(|(event, _)| *event == EVENT_SYSTEM_FOREGROUND);
+            // A rapid Alt+Tab sequence is only a foreground change. Shell
+            // activation notifications already update full-screen state, so
+            // skip taskbar enumeration and the duplicate fullscreen scan here.
+            if moved && !foreground_only {
+                enforce_hybrid();
+            }
             with_shell(|shell| {
                 let windows_changed = shell.model.borrow_mut().apply(events);
-                shell.update_fullscreen();
-                let tray_changed = tray_host::with_tray(|tray| tray.prune()).unwrap_or(false);
+                if moved && !foreground_only {
+                    shell.update_fullscreen();
+                }
+                let tray_changed = if foreground_only {
+                    false
+                } else {
+                    tray_host::with_tray(|tray| tray.prune()).unwrap_or(false)
+                };
                 // Any window event can change whether a window overlaps the
                 // dock (smart auto-hide), so bars always hear about it.
                 if windows_changed || tray_changed || moved {
-                    shell.notify_bars();
+                    if foreground_only {
+                        shell.notify_foreground_bars();
+                    } else {
+                        shell.notify_bars();
+                    }
                 }
             });
             LRESULT(0)

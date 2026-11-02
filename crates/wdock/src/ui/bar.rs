@@ -99,6 +99,11 @@ pub trait View {
     fn model_changed(&mut self) -> bool {
         false
     }
+    /// Only the foreground window changed. Views can skip work tied to window
+    /// geometry and visibility, which remain unchanged during Alt+Tab.
+    fn foreground_changed(&mut self) -> bool {
+        self.model_changed()
+    }
     /// The shell hides bars over a full-screen app (game mode) and shows them
     /// again afterwards. Return `true` if the view managed its own visibility.
     fn suspend(&mut self, _suspended: bool) -> bool {
@@ -117,10 +122,17 @@ pub trait View {
 /// Posted to every bar after the window model changed.
 pub const WM_APP_MODEL: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 10;
 pub const WM_APP_ANIMATION_FRAME: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 35;
+const MODEL_FOREGROUND_ONLY: usize = 1;
 
 pub fn notify_model_changed(hwnd: HWND) {
     unsafe {
         let _ = PostMessageW(Some(hwnd), WM_APP_MODEL, WPARAM(0), LPARAM(0));
+    }
+}
+
+pub fn notify_foreground_changed(hwnd: HWND) {
+    unsafe {
+        let _ = PostMessageW(Some(hwnd), WM_APP_MODEL, WPARAM(MODEL_FOREGROUND_ONLY), LPARAM(0));
     }
 }
 
@@ -390,6 +402,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             }
             WM_TIMER => state.view.timer(wparam.0),
             WM_APP_ANIMATION_FRAME => state.view.animation_frame(wparam.0),
+            WM_APP_MODEL if wparam.0 == MODEL_FOREGROUND_ONLY => state.view.foreground_changed(),
             WM_APP_MODEL => state.view.model_changed(),
             WM_APP_COMMAND => state.view.command(wparam.0),
             appbar::WM_APP_APPBAR => {

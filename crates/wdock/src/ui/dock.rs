@@ -936,6 +936,13 @@ impl View for Dock {
         entries_changed
     }
 
+    fn foreground_changed(&mut self) -> bool {
+        // Alt+Tab only changes active/recent markers. Window geometry and
+        // visibility are unchanged, so avoid scanning every app window for
+        // Smart auto-hide on every key press.
+        self.refresh()
+    }
+
     fn paint(&mut self, cx: &PaintCx) {
         let s = cx.scale;
         if self.reveal <= 0.0 && self.auto_hide != AutoHide::Off {

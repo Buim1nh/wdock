@@ -105,6 +105,15 @@ pub fn notify() {
     }
 }
 
+/// Foreground switches affect only window-oriented popups, not tray/status panels.
+pub fn notify_foreground_changed() {
+    for hwnd in [OVERVIEW.get(), PREVIEW.get()].into_iter().flatten() {
+        if alive(hwnd) {
+            bar::notify_foreground_changed(hwnd);
+        }
+    }
+}
+
 /// Keeps a popup of `size` inside the monitor containing `anchor`.
 fn clamp(left: i32, top: i32, width: i32, height: i32, within: RECT) -> RECT {
     let left = left.clamp(within.left, (within.right - width).max(within.left));

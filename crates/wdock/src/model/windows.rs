@@ -187,6 +187,11 @@ impl WindowModel {
         for (event, hwnd) in events {
             changed |= match event {
                 EVENT_OBJECT_DESTROY => self.remove(hwnd),
+                // Switching between known windows is a hot path (Alt+Tab can
+                // deliver several foreground events per frame). Their app
+                // identity and visibility are already cached, so don't repeat
+                // the DWM/process/window queries in `refresh` for each step.
+                EVENT_SYSTEM_FOREGROUND if self.index(hwnd).is_some() => self.set_foreground(hwnd),
                 EVENT_SYSTEM_FOREGROUND => self.refresh(hwnd) | self.set_foreground(hwnd),
                 _ => self.refresh(hwnd),
             };
