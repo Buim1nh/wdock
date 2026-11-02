@@ -91,6 +91,10 @@ Choose **Island style** in wdock settings for a floating Island or a top-edge No
 
 - **Files:** drag files or folders from Explorer onto the Island, then drag an entry out to a compatible app, click it to open, or use × to remove its reference. Scroll the list if needed. The shelf stores up to 32 paths, not file contents; moving or deleting the original can make a reference unavailable.
 
+- **Bookmarks:** choose **Manage bookmarks** in Files, or search for **Bookmarks** in the launcher (Win+Alt+Space). Add file or folder paths, search, pin, organize into groups, open their location in Explorer or copy their path. Removing a bookmark only removes the reference; deleting a group keeps its items ungrouped. Existing file-shelf entries are imported automatically.
+
+- **Clipboard text:** turn on **Clipboard history (RAM)** in wdock settings, then open **Clipboard** from Files or search for **Clipboard history** in the launcher. Search, copy, pin, remove, pause/resume capture and clear unpinned items. History is off by default and stays in memory, including pinned items: quitting wdock or disabling history clears it. Limits are 100 entries, 32 KiB of UTF-8 text per entry and 1 MiB total. No images, files or automatic pasting are captured. Capture stops while a full-screen app is in front; changes during that time are skipped. Clipboard formats that request exclusion from history are respected when supplied by the source app; this does not detect every secret.
+
 - **Now playing**, for any app that shows Windows' media controls (Spotify, browsers, media players):
   - Title, artist, play/pause, previous/next and a seekable progress bar.
   - The cover art when the app provides one. Many web pages provide none (a browser only passes on what the page declares), so the island then shows the playing app's icon, and while expanded a live view of the playing window.
@@ -211,7 +215,7 @@ Changing options does not need the setup again. Click the status icons in the to
 
 - theme, backdrop, font (and **Use font in Windows** / **Windows default font**), top bar on all monitors or only the primary one
 - dock auto-hide, hover effect (magnify or glass), icon size and hover size
-- Dynamic Island on/off, style (Island or Notch) and notch width, animated equalizer, lyrics background motion, file shelf and tab order
+- Dynamic Island on/off, style (Island or Notch) and notch width, animated equalizer, lyrics background motion, file shelf and tab order; opt-in text clipboard history in RAM
 - start at sign-in (a per-user scheduled task named `wdock`, the same one the setup creates)
 
 Each change is saved to `config.toml` (comments and other keys are kept) and applies at once. **Open config file** opens the file in your default editor for the other keys.
@@ -232,7 +236,7 @@ The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a
 | `[topbar]` | `height` (30), `monitors` (`"all"` or `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible` icons before the overflow chevron (12), `overflow` executable fragments always hidden |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` or `"glass"`), optional `hover_size`, legacy `magnification` (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
-| `[island]` | `enabled` (true), `style` (`"island"` or `"notch"`), `notch_width` (200), `file_shelf` (true), `widget_order` (`["media", "files"]`), `lyrics_background_motion` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
+| `[island]` | `enabled` (true), `style` (`"island"` or `"notch"`), `notch_width` (200), `file_shelf` (true), `clipboard_history` (false, memory-only text), `widget_order` (`["media", "files"]`), `lyrics_background_motion` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
 
 To use the font in Windows itself, open wdock settings and click **Use font in Windows** (asks for administrator rights; sign out and back in to apply). It substitutes the Segoe UI families and installs missing `.ttf`/`.otf` files from `%LOCALAPPDATA%\wdock\fonts` first. **Windows default font** undoes it. SF Pro is not bundled because Apple does not allow redistribution; see `fonts\README.md`.
 
@@ -245,6 +249,7 @@ State and logs live in `%LOCALAPPDATA%\wdock\`:
 | `logs\wdock.log`, `logs\wdock-guard.log` | logs (rotated at 2 MB) |
 | `pinned.txt` | pinned apps, in dock order |
 | `tray-hidden.txt`, `tray-shown.txt` | explicit tray icon placement choices |
+| `bookmarks.toml` | file/folder references, pins and groups; the old `island-files.txt` is kept as a migration backup |
 | `taskbar.txt` | explorer's original auto-hide state |
 
 ## Troubleshooting

@@ -72,6 +72,9 @@ style = "island"
 notch_width = 200.0
 # Enable optional widgets and choose their tab order.
 file_shelf = true
+# Collect text only, in RAM (including pinned items). Off by default.
+# Capture stops during full-screen apps; disabling clears all history.
+clipboard_history = false
 widget_order = ["media", "files"]
 # Pomodoro lengths in minutes.
 pomodoro_work = 25

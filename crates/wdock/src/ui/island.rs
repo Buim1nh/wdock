@@ -153,7 +153,7 @@ fn pomodoro_state() -> Pomodoro {
     shared(|s| s.pomodoro.clone()).unwrap_or_else(|| Pomodoro::new(25, 5))
 }
 
-fn notify_views() {
+pub(crate) fn notify_views() {
     let views = shared(|s| s.views.clone()).unwrap_or_default();
     for hwnd in views {
         bar::notify_model_changed(hwnd);
@@ -369,6 +369,11 @@ fn file_rect(index: usize, scale: f32) -> D2D_RECT_F {
     rect(16.0 * scale, top, (EXPANDED.0 - 16.0) * scale, top + 32.0 * scale)
 }
 
+fn files_action_rect(index: usize, scale: f32) -> D2D_RECT_F {
+    let left = if index == 0 { 16.0 } else { 346.0 };
+    rect(left * scale, 204.0 * scale, (left + 318.0) * scale, 232.0 * scale)
+}
+
 /// A short announcement.
 #[derive(Debug, Clone, PartialEq)]
 struct Notice {
@@ -488,6 +493,8 @@ enum Hot {
     Tab(usize),
     File(usize),
     RemoveFile(usize),
+    Bookmarks,
+    Clipboard,
 }
 
 #[derive(Default)]
@@ -733,6 +740,13 @@ impl Island {
     fn paint_files(&self, cx: &PaintCx, formats: &Formats, alpha: f32) {
         let s = cx.scale;
         let paths = island_files::list();
+        for (i, label, hot) in [(0, "Manage bookmarks", Hot::Bookmarks), (1, "Clipboard history", Hot::Clipboard)] {
+            let r = files_action_rect(i, s);
+            if let Ok(brush) = cx.gfx.brush(with_alpha(if self.hot == Some(hot) { TAB_SELECTED } else { SURFACE }, alpha)) {
+                unsafe { cx.dc.FillRoundedRectangle(&rounded(r, 8.0*s), &brush) };
+            }
+            text::draw(cx, label, &formats.small, rect(r.left+12.0*s,r.top,r.right-8.0*s,r.bottom), with_alpha(TEXT,alpha));
+        }
         if paths.is_empty() {
             text::draw(cx, "Drop files here to keep them close", &formats.artist,
                 rect(22.0*s, 58.0*s, 378.0*s, 105.0*s), with_alpha(DIM, alpha));
@@ -965,6 +979,8 @@ impl Island {
             if contains(tab_rect(i, self.scale), x, y) { return Some(Hot::Tab(i)); }
         }
         if self.tab == Tab::Files {
+            if contains(files_action_rect(0, self.scale), x, y) { return Some(Hot::Bookmarks); }
+            if contains(files_action_rect(1, self.scale), x, y) { return Some(Hot::Clipboard); }
             let files = island_files::list();
             for (row, index) in (self.file_scroll..files.len()).take(4).enumerate() {
                 let r = file_rect(row, self.scale);
@@ -1187,6 +1203,8 @@ impl View for Island {
                 if self.lyrics_pinned { self.raise(); }
                 return true;
             }
+            Some(Hot::Bookmarks) => { popup::toggle_bookmarks(self.frame().unwrap_or(self.monitor), self.scale); return true; }
+            Some(Hot::Clipboard) => { popup::toggle_clipboard(self.frame().unwrap_or(self.monitor), self.scale); return true; }
             Some(Hot::File(i)) => { self.file_pressed = Some((i, x, y)); unsafe { SetCapture(self.hwnd); } return false; }
             Some(Hot::RemoveFile(i)) => {
                 island_files::remove(i);

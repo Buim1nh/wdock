@@ -80,6 +80,10 @@ Viên thuốc ở giữa đỉnh mỗi màn hình, rê chuột vào thì mở r�
 - **Widget:** Island mở rộng có các tab Media và Files. Trong **wdock settings**, bật/tắt **Island file shelf** và đổi **Order (M/F)** để sắp xếp Media/Files. Pomodoro nằm trong Media.
 - **Kiểu và thao tác:** trong wdock settings, chọn **Island style** để chuyển giữa Island và Notch; dùng **Notch width** để chỉnh độ rộng khi thu gọn. Cuộn ngang trên bảng mở rộng để đổi tab. Cuộn lên trên hàng tab để thu gọn, cuộn xuống trên notch hoặc island thu gọn để mở lại. Cuộn dọc trong Files vẫn dùng để xem danh sách tệp.
 - **Files:** kéo file hoặc thư mục từ Explorer vào Island; kéo một mục ra ứng dụng tương thích, bấm để mở, hoặc bấm × để bỏ tham chiếu. Cuộn chuột để xem thêm. Khay lưu tối đa 32 đường dẫn, không sao chép nội dung; nếu file gốc bị xóa hoặc chuyển đi thì tham chiếu có thể không còn dùng được.
+
+- **Bookmark:** chọn **Manage bookmarks** trong Files, hoặc tìm **Bookmarks** bằng launcher (Win+Alt+Space). Thêm đường dẫn file/thư mục, tìm kiếm, ghim, chia nhóm, mở vị trí trong Explorer hoặc copy đường dẫn. Xóa bookmark chỉ bỏ tham chiếu; xóa nhóm đưa các mục về danh sách chưa phân nhóm. Các mục của khay Files cũ được nhập tự động.
+
+- **Clipboard text:** bật **Clipboard history (RAM)** trong wdock settings, rồi mở **Clipboard** từ Files hoặc tìm **Clipboard history** bằng launcher. Có tìm kiếm, copy, ghim, xóa, tạm dừng/tiếp tục thu thập và xóa các mục chưa ghim. Tính năng mặc định tắt; toàn bộ lịch sử, kể cả mục ghim, chỉ nằm trong RAM và mất khi thoát wdock hoặc tắt tính năng. Giới hạn 100 mục, mỗi mục tối đa 32 KiB text UTF-8 và tổng cộng 1 MiB. Không thu thập ảnh/file hay tự động paste. Việc thu thập dừng khi có app toàn màn hình ở phía trước; các thay đổi trong thời gian đó được bỏ qua. wdock tôn trọng format yêu cầu loại trừ khỏi lịch sử nếu ứng dụng nguồn cung cấp; cơ chế này không phát hiện được mọi nội dung bí mật.
 - **Đang phát:** dùng được với mọi app có điều khiển media của Windows (Spotify, trình duyệt, trình phát nhạc).
 - **Lyrics:** lời bài hát đồng bộ cho Spotify. Cần companion Spicetify và đang mở Spicy Lyrics hoặc Lyrics Plus; bridge gửi lời đang hiển thị cho wdock qua loopback (`127.0.0.1:43179`, chỉ nhận từ client Spotify). Cài bằng:
 
@@ -208,7 +212,7 @@ Thay đổi tùy chọn không cần chạy lại trình cài đặt. Bấm vào
 - giao diện, nền (backdrop), top bar trên tất cả màn hình hoặc chỉ màn hình chính
 - font (kèm **Use font in Windows** / **Windows default font**)
 - tự ẩn dock, hiệu ứng hover (magnify hoặc glass), kích thước icon và kích thước khi hover
-- Dynamic Island bật/tắt, kiểu (Island hoặc Notch) và độ rộng notch, hiệu ứng equalizer, nền chuyển động của lời bài hát, kệ file và thứ tự tab
+- Dynamic Island bật/tắt, kiểu (Island hoặc Notch) và độ rộng notch, hiệu ứng equalizer, nền chuyển động của lời bài hát, kệ file và thứ tự tab; bật/tắt lịch sử clipboard text trong RAM
 - khởi động cùng Windows (một tác vụ theo người dùng tên `wdock`, cùng tác vụ mà trình cài đặt tạo)
 
 Mỗi thay đổi được lưu vào `config.toml` (giữ nguyên chú thích và các khóa khác) và áp dụng ngay. **Mở file cấu hình** mở file trong trình soạn thảo mặc định, để chỉnh các khóa khác.
@@ -229,7 +233,7 @@ File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động 
 | `[topbar]` | `height` (30), `monitors` (`"all"` hoặc `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible`: số icon trước nút tràn (12); `overflow`: các tên file chạy luôn bị đưa vào phần tràn |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` hoặc `"glass"`), `hover_size` tùy chọn, `magnification` cũ (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
-| `[island]` | `enabled`, `style` (`"island"` hoặc `"notch"`), `notch_width` (200), `lyrics_background_motion`, `file_shelf`, `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
+| `[island]` | `enabled`, `style` (`"island"` hoặc `"notch"`), `notch_width` (200), `lyrics_background_motion`, `file_shelf`, `clipboard_history` (false, chỉ text trong RAM), `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
 
 Để Windows cũng dùng font đó, mở wdock settings và bấm **Use font in Windows** (cần quyền admin; đăng xuất rồi đăng nhập lại để áp dụng). wdock thay các họ font Segoe UI và cài trước các file `.ttf`/`.otf` còn thiếu trong `%LOCALAPPDATA%\wdock\fonts`. **Windows default font** trả lại như cũ. SF Pro không được đóng gói sẵn vì Apple không cho phép phân phối lại; xem `fonts\README.md`.
 
@@ -245,6 +249,7 @@ Dữ liệu và log nằm trong `%LOCALAPPDATA%\wdock\`:
 | `pinned.txt` | app ghim, theo thứ tự trên dock |
 | `taskbar.txt` | trạng thái auto-hide gốc của explorer |
 | `tray-hidden.txt`, `tray-shown.txt` | lựa chọn vị trí icon khay trong wdock |
+| `bookmarks.toml` | tham chiếu file/thư mục, mục ghim và nhóm; giữ `island-files.txt` cũ làm bản dự phòng khi chuyển dữ liệu |
 
 ## Xử lý sự cố
 
