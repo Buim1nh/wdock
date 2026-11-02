@@ -13,12 +13,17 @@ serde = { version = "1", features = ["derive"] }
 windows-core = "0.62"
 windows-future = "0.3"
 windows-numerics = "0.3"
+windows-collections = "0.3"
 toml = { version = "1", default-features = false, features = ["parse", "serde"] }
+win-nightlight-lib = "0.5.0"
 
 [dependencies.windows]
 workspace = true
 features = [
     "Data_Json",
+    "Devices_Radios",
+    "Devices_Enumeration",
+    "Win32_Devices_Bluetooth",
     "Foundation",
     "Web_Http",
     "Win32_Devices_Display",
@@ -66,6 +71,7 @@ features = [
     "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_System_WinRT",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

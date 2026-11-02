@@ -94,6 +94,7 @@ pub trait View {
     fn timer(&mut self, _id: usize) -> bool {
         false
     }
+    fn animation_frame(&mut self, _generation: usize) -> bool { false }
     /// The window model changed (see `notify_model_changed`).
     fn model_changed(&mut self) -> bool {
         false
@@ -115,6 +116,7 @@ pub trait View {
 
 /// Posted to every bar after the window model changed.
 pub const WM_APP_MODEL: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 10;
+pub const WM_APP_ANIMATION_FRAME: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 35;
 
 pub fn notify_model_changed(hwnd: HWND) {
     unsafe {
@@ -387,6 +389,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 state.view.double_click(x, y, button_of(msg))
             }
             WM_TIMER => state.view.timer(wparam.0),
+            WM_APP_ANIMATION_FRAME => state.view.animation_frame(wparam.0),
             WM_APP_MODEL => state.view.model_changed(),
             WM_APP_COMMAND => state.view.command(wparam.0),
             appbar::WM_APP_APPBAR => {

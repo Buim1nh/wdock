@@ -1,10 +1,20 @@
 use windows::Win32::Foundation::{LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
+    DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 use windows::core::BOOL;
+
+/// Current refresh rate for this monitor's display device, with a safe fallback.
+pub fn refresh_hz(handle: HMONITOR) -> u32 {
+    let mut info = MONITORINFOEXW::default();
+    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    if !unsafe { GetMonitorInfoW(handle, &mut info.monitorInfo) }.as_bool() { return 60; }
+    let mut mode = DEVMODEW { dmSize: size_of::<DEVMODEW>() as u16, ..Default::default() };
+    if !unsafe { EnumDisplaySettingsW(windows::core::PCWSTR(info.szDevice.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode) }.as_bool() { return 60; }
+    if (30..=360).contains(&mode.dmDisplayFrequency) { mode.dmDisplayFrequency } else { 60 }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Monitor {

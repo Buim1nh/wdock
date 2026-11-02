@@ -77,6 +77,7 @@ const TIMER_FOCUS: usize = 2;
 const TIMER_RECLAIM: usize = 3;
 const TIMER_POMODORO: usize = 4;
 const TIMER_APPBAR: usize = 5;
+const TIMER_FULLSCREEN_CHECK: usize = 6;
 /// Explorer applies a reservation asynchronously; check it this long after.
 const APPBAR_CHECK_MS: u32 = 1500;
 /// Some apps (Steam) ignore a TaskbarCreated that arrives soon after another
@@ -283,6 +284,7 @@ impl Shell {
         // notification instead.
         winevents::watch_process(if monitor.is_some() { 0 } else { wininfo::process_id(foreground) });
         if monitor == self.fullscreen {
+            if monitor.is_none() { unsafe { let _ = KillTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK); } }
             return;
         }
         match monitor {
@@ -296,6 +298,10 @@ impl Shell {
             }
         }
         self.fullscreen = monitor;
+        unsafe {
+            if monitor.is_some() { SetTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK, 1000, None); }
+            else { let _ = KillTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK); }
+        }
         popup::set_game_mode(monitor.is_some());
         if monitor.is_none() {
             // Explorer gives the strip back once the full-screen app is gone.
@@ -605,9 +611,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC {
                 services::refresh_displays();
             }
-            if (wparam.0 as u32 == PBT_POWERSETTINGCHANGE || wparam.0 as u32 == PBT_APMPOWERSTATUSCHANGE)
-                && services::refresh_power()
-            {
+            let saver_changed = wparam.0 as u32 == PBT_POWERSETTINGCHANGE && services::power::power_setting_changed(lparam);
+            if saver_changed || ((wparam.0 as u32 == PBT_POWERSETTINGCHANGE || wparam.0 as u32 == PBT_APMPOWERSTATUSCHANGE)
+                && services::refresh_power()) {
                 with_shell(|shell| shell.notify_bars());
             }
             LRESULT(1)
@@ -651,6 +657,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 shell.config.island.notch_width = updated.notch_width;
                 island::refresh_appearance();
             });
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_FULLSCREEN_CHECK => {
+            with_shell(Shell::update_fullscreen);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_APPBAR => {

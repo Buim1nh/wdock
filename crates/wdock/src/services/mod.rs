@@ -13,6 +13,7 @@ pub mod media;
 pub mod network;
 pub mod power;
 pub mod privacy;
+pub mod quick_controls;
 pub mod wifi;
 
 use std::cell::RefCell;

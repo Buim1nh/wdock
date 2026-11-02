@@ -25,6 +25,7 @@ use crate::ui::text;
 const WIDTH: f32 = 300.0;
 const PADDING: f32 = 14.0;
 const TILE: f32 = 52.0;
+const QUICK_TILE_HEIGHT: f32 = 54.0;
 const LABEL: f32 = 22.0;
 const SLIDER_ROW: f32 = 32.0;
 const ICON_BUTTON: f32 = 30.0;
@@ -34,6 +35,7 @@ const OUTPUT_ROW: f32 = 30.0;
 const GAP: f32 = 10.0;
 const TIMER_CONFIRM: usize = 1;
 const TIMER_WIFI_ANIMATE: usize = 2;
+const TIMER_QUICK_STATE: usize = 3;
 const WIFI_FRAME_MS: u32 = 15;
 const PANEL_RADIUS: f32 = 16.0;
 const CONFIRM_MS: u32 = 3000;
@@ -48,6 +50,15 @@ fn animate_wifi(progress: f32, open: bool) -> (f32, bool) {
 enum Hit {
     Network,
     Wifi(WifiHit),
+    Bluetooth,
+    BluetoothExpand,
+    BluetoothDevice(usize),
+    BluetoothSettings,
+    Projection,
+    ProjectionMode(usize),
+    NightLight,
+    EnergySaver,
+    Airplane,
     Mute,
     Volume,
     OutputToggle,
@@ -68,6 +79,14 @@ const POWER_ROW: [(Hit, &str, &str); 6] = [
     (Hit::Session(SessionAction::Restart), glyphs::RESTART, "Restart"),
     (Hit::Session(SessionAction::ShutDown), glyphs::POWER, "Shut down"),
     (Hit::Settings, glyphs::SETTINGS, "Settings"),
+];
+
+const QUICK_TILES: [(Hit, &str, &str); 5] = [
+    (Hit::Bluetooth, glyphs::BLUETOOTH, "Bluetooth"),
+    (Hit::Projection, glyphs::DISPLAY, "Project"),
+    (Hit::NightLight, "\u{E708}", "Night light"),
+    (Hit::EnergySaver, "\u{E945}", "Energy saver"),
+    (Hit::Airplane, "\u{E709}", "Airplane"),
 ];
 
 struct Drag {
@@ -94,6 +113,18 @@ pub struct QuickSettingsView {
     wifi_open: bool,
     wifi_progress: f32,
     wifi_clip: D2D_RECT_F,
+    bluetooth: Option<bool>,
+    bluetooth_open: bool,
+    bluetooth_devices: Option<Vec<services::quick_controls::BluetoothDevice>>,
+    bluetooth_scroll: usize,
+    bluetooth_action: Option<(String, String)>,
+    bluetooth_scanning: bool,
+    quick_message: Option<String>,
+    projection_open: bool,
+    quick_tick: u32,
+    energy_saver: Option<bool>,
+    night_light: Option<bool>,
+    airplane: Option<bool>,
 }
 
 impl QuickSettingsView {
@@ -115,6 +146,18 @@ impl QuickSettingsView {
             wifi_open: false,
             wifi_progress: 0.0,
             wifi_clip: rect(0.0, 0.0, 0.0, 0.0),
+            bluetooth: services::quick_controls::bluetooth(),
+            bluetooth_open: false,
+            bluetooth_devices: None,
+            bluetooth_scroll: 0,
+            bluetooth_action: None,
+            bluetooth_scanning: false,
+            quick_message: None,
+            projection_open: false,
+            quick_tick: 0,
+            energy_saver: services::quick_controls::energy_saver(),
+            night_light: services::quick_controls::night_light(),
+            airplane: services::quick_controls::airplane(),
         };
         view.layout();
         view
@@ -135,6 +178,36 @@ impl QuickSettingsView {
             let visible = (bottom - top) * self.wifi_progress;
             self.wifi_clip = rect(left, top, right, top + visible);
             y += (bottom - top + GAP * s / 2.0) * self.wifi_progress;
+        }
+
+        let tile_gap = 5.0 * s;
+        let tile_width = (right - left - 2.0 * tile_gap) / 3.0;
+        for (i, (hit, _, _)) in QUICK_TILES.iter().enumerate() {
+            let x = left + (i % 3) as f32 * (tile_width + tile_gap);
+            let top = y + (i / 3) as f32 * (QUICK_TILE_HEIGHT + 5.0) * s;
+            if *hit == Hit::Bluetooth {
+                self.targets.push((Hit::BluetoothExpand, rect(x + tile_width - 26.0 * s, top, x + tile_width, top + 27.0 * s)));
+            }
+            self.targets.push((*hit, rect(x, top, x + tile_width, top + QUICK_TILE_HEIGHT * s)));
+        }
+        y += (2.0 * QUICK_TILE_HEIGHT + 10.0) * s;
+
+        if self.bluetooth_open {
+            if let Some(devices) = self.bluetooth_devices.as_ref().filter(|_| self.bluetooth != Some(false)) {
+                for i in self.bluetooth_scroll..devices.len().min(self.bluetooth_scroll + 3) {
+                    self.targets.push((Hit::BluetoothDevice(i), rect(left, y, right, y + 34.0 * s)));
+                    y += 34.0 * s;
+                }
+            }
+            self.targets.push((Hit::BluetoothSettings, rect(left, y, right, y + 34.0 * s)));
+            y += (34.0 + GAP) * s;
+        }
+        if self.projection_open {
+            for i in 0..4 {
+                self.targets.push((Hit::ProjectionMode(i), rect(left, y, right, y + 30.0 * s)));
+                y += 30.0 * s;
+            }
+            y += GAP * s;
         }
 
         let slider = |hit: Hit, y: &mut f32, targets: &mut Vec<_>, tracks: &mut Vec<_>| {
@@ -243,6 +316,9 @@ impl QuickSettingsView {
 impl View for QuickSettingsView {
     fn attach(&mut self, hwnd: HWND) {
         self.hwnd = hwnd;
+        services::quick_controls::refresh_bluetooth();
+        services::quick_controls::refresh_airplane();
+        unsafe { SetTimer(Some(hwnd), TIMER_QUICK_STATE, 2000, None); }
     }
 
     fn window_corner_radius(&self) -> Option<f32> { Some(PANEL_RADIUS) }
@@ -320,6 +396,41 @@ impl View for QuickSettingsView {
                     text::draw(cx, glyphs::CHEVRON_UP, &icon, chevron_rect, up);
                 }
                 Hit::Wifi(_) => {}
+                Hit::BluetoothExpand => {}
+                Hit::BluetoothDevice(i) => {
+                    if let Some(device) = self.bluetooth_devices.as_ref().and_then(|d| d.get(i)) {
+                        if self.hot == Some(hit) { fill(r, 8.0 * s, theme.hover); }
+                        text::draw(cx, glyphs::BLUETOOTH, &icon, rect(r.left, r.top, r.left + 28.0*s, r.bottom), theme.text_dim);
+                        text::draw(cx, &device.name, &normal, rect(r.left + 32.0*s, r.top, r.right - 88.0*s, r.bottom), theme.text);
+                        let state = self.bluetooth_action.as_ref().filter(|(id, _)| id == &device.id).map(|(_, state)| state.as_str()).unwrap_or(if device.connected == Some(true) { "Connected" } else if device.paired { "Paired" } else { "Pair" });
+                        text::draw(cx, state, &right_aligned, rect(r.right - 88.0*s, r.top, r.right - 5.0*s, r.bottom), theme.text_dim);
+                    }
+                }
+                Hit::BluetoothSettings => {
+                    if self.hot == Some(hit) { fill(r, 8.0*s, theme.hover); }
+                    let scan_failed = self.bluetooth_action.as_ref().is_some_and(|(id, message)| id.is_empty() && message.starts_with("Bluetooth scan failed"));
+                    let label = if self.bluetooth == Some(false) { "Bluetooth is off" } else if scan_failed { "Scan failed · Windows settings ↗" } else if self.bluetooth_scanning || self.bluetooth_devices.is_none() { "Searching for devices…" } else if self.bluetooth_devices.as_ref().is_some_and(Vec::is_empty) { "No Bluetooth devices found" } else { "More Bluetooth settings ↗" };
+                    text::draw(cx, label, &normal, rect(r.left + 8.0*s, r.top, r.right - 8.0*s, r.bottom), theme.text_dim);
+                }
+                Hit::ProjectionMode(i) => {
+                    if self.hot == Some(hit) { fill(r, 8.0*s, theme.hover); }
+                    let labels = ["PC screen only", "Duplicate", "Extend", "Second screen only"];
+                    text::draw(cx, labels[i], &normal, rect(r.left + 10.0*s, r.top, r.right - 10.0*s, r.bottom), theme.text);
+                }
+                Hit::Bluetooth | Hit::Projection | Hit::NightLight | Hit::EnergySaver | Hit::Airplane => {
+                    let (_, glyph, label) = QUICK_TILES.iter().find(|(h, _, _)| *h == hit).unwrap();
+                    let active = match hit { Hit::Bluetooth => self.bluetooth == Some(true), Hit::EnergySaver => self.energy_saver == Some(true), Hit::NightLight => self.night_light == Some(true), Hit::Airplane => self.airplane == Some(true), _ => false };
+                    fill(r, 10.0 * s, if active { theme.accent } else { plate_color(hit) });
+                    let color = if active { theme.on_accent } else { theme.text };
+                    text::draw(cx, glyph, &big_icon, rect(r.left, r.top + 5.0*s, r.right, r.top + 28.0*s), color);
+                    let opens_windows = false;
+                    text::draw(cx, label, &small, rect(r.left + 2.0*s, r.top + 30.0*s, r.right - 2.0*s, r.bottom - 3.0*s), color);
+                    if hit == Hit::Bluetooth {
+                        let glyph = if self.bluetooth_open { glyphs::CHEVRON_UP } else { glyphs::CHEVRON_DOWN };
+                        text::draw(cx, glyph, &icon, rect(r.right - 26.0*s, r.top, r.right, r.top + 27.0*s), color);
+                    }
+                    if opens_windows { text::draw(cx, "↗", &small, rect(r.right - 16.0*s, r.top + 2.0*s, r.right - 3.0*s, r.top + 18.0*s), color); }
+                }
                 Hit::Mute => {
                     let muted = self.status.volume.is_some_and(|v| v.muted);
                     fill(r, 15.0 * s, plate_color(hit));
@@ -430,7 +541,7 @@ impl View for QuickSettingsView {
         let info_top = self.targets.last().map_or(0.0, |(_, r)| r.bottom);
         let info = rect(0.0, info_top, cx.width, info_top + INFO_LINE * s);
         let color = if self.confirm.is_some() { theme.accent } else { theme.text_dim };
-        text::draw(cx, self.info_text(), &small, info, color);
+        text::draw(cx, if self.confirm.is_some() { self.info_text() } else { self.quick_message.as_deref().unwrap_or_else(|| self.info_text()) }, &small, info, color);
     }
 
     fn mouse_move(&mut self, x: f32, y: f32) -> bool {
@@ -473,11 +584,54 @@ impl View for QuickSettingsView {
         match self.hit(x, y) {
             Some(Hit::Network) => {
                 self.wifi_open = !self.wifi_open;
+                if self.wifi_open { self.bluetooth_open = false; self.projection_open = false; }
                 if self.wifi_open && self.wifi.is_none() { self.wifi = Some(WifiPanel::open(self.hwnd)); }
                 unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); }
                 self.hot = None;
                 self.layout();
             }
+            Some(Hit::Bluetooth) => { services::quick_controls::toggle_bluetooth(); self.quick_message = services::quick_controls::quick_message(); }
+            Some(Hit::BluetoothExpand) => {
+                self.bluetooth_open = !self.bluetooth_open;
+                if self.bluetooth_open {
+                    self.projection_open = false;
+                    if self.wifi_open {
+                        self.wifi_open = false;
+                        unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); }
+                    }
+                    self.bluetooth_devices = services::quick_controls::bluetooth_devices();
+                    services::quick_controls::refresh_bluetooth_devices();
+                    self.bluetooth_scanning = services::quick_controls::bluetooth_scan_busy();
+                }
+                self.hot = None;
+                self.layout();
+            }
+            Some(Hit::BluetoothDevice(i)) => {
+                if let Some(device) = self.bluetooth_devices.as_ref().and_then(|d| d.get(i)) {
+                    if !device.paired && device.can_pair {
+                        services::quick_controls::pair_bluetooth_device(device.id.clone());
+                    } else if device.connected != Some(true) {
+                        services::quick_controls::report("Reconnect unavailable for this device");
+                        self.quick_message = services::quick_controls::quick_message();
+                    }
+                }
+            }
+            Some(Hit::BluetoothSettings) => {
+                launch::open("ms-settings:bluetooth");
+                self.close();
+            }
+            Some(Hit::Projection) => {
+                self.projection_open = !self.projection_open;
+                if self.projection_open {
+                    self.bluetooth_open = false;
+                    if self.wifi_open { self.wifi_open = false; unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); } }
+                }
+                self.layout();
+            }
+            Some(Hit::ProjectionMode(i)) => { services::quick_controls::set_projection(i); self.quick_message = services::quick_controls::quick_message(); }
+            Some(Hit::NightLight) => { services::quick_controls::toggle_night_light(); self.quick_message = services::quick_controls::quick_message(); }
+            Some(Hit::EnergySaver) => { services::quick_controls::toggle_energy_saver(); self.quick_message = services::quick_controls::quick_message(); }
+            Some(Hit::Airplane) => { services::quick_controls::toggle_airplane(); self.quick_message = services::quick_controls::quick_message(); }
             Some(Hit::Wifi(hit)) => {
                 let outcome = self.wifi.as_mut().map_or(Outcome::Nothing, |w| w.click(hit));
                 self.layout();
@@ -529,6 +683,12 @@ impl View for QuickSettingsView {
     }
 
     fn wheel(&mut self, x: f32, y: f32, delta: i16) -> bool {
+        if self.bluetooth_open && matches!(self.hit(x, y), Some(Hit::BluetoothDevice(_) | Hit::BluetoothSettings)) {
+            let max = self.bluetooth_devices.as_ref().map_or(0, |d| d.len().saturating_sub(3));
+            let next = if delta > 0 { self.bluetooth_scroll.saturating_sub(1) } else { (self.bluetooth_scroll + 1).min(max) };
+            if next != self.bluetooth_scroll { self.bluetooth_scroll = next; self.layout(); return true; }
+            return false;
+        }
         let step = if delta > 0 { 0.05 } else { -0.05 };
         if let Some(wifi) = self.wifi.as_mut().filter(|w| self.wifi_open && self.wifi_progress >= 1.0 && w.contains(x, y)) {
             let changed = wifi.wheel(delta);
@@ -549,6 +709,37 @@ impl View for QuickSettingsView {
     }
 
     fn timer(&mut self, id: usize) -> bool {
+        if id == TIMER_QUICK_STATE {
+            let mut devices_changed = false;
+            self.quick_tick = self.quick_tick.wrapping_add(1);
+            if self.bluetooth_open {
+                let devices = services::quick_controls::bluetooth_devices();
+                devices_changed = devices != self.bluetooth_devices;
+                self.bluetooth_devices = devices;
+                self.bluetooth_scroll = self.bluetooth_scroll.min(self.bluetooth_devices.as_ref().map_or(0, |d| d.len().saturating_sub(3)));
+                if self.quick_tick % 5 == 0 { services::quick_controls::refresh_bluetooth_devices(); }
+                if devices_changed { self.layout(); }
+            }
+            let action = services::quick_controls::bluetooth_device_action();
+            let action_changed = self.bluetooth_action != action;
+            self.bluetooth_action = action;
+            let scanning = services::quick_controls::bluetooth_scan_busy();
+            let scanning_changed = self.bluetooth_scanning != scanning;
+            self.bluetooth_scanning = scanning;
+            let quick_message = services::quick_controls::quick_message();
+            let message_changed = quick_message.is_some() && self.quick_message != quick_message;
+            if message_changed { self.quick_message = quick_message; }
+            let bt = services::quick_controls::bluetooth();
+            let saver = services::quick_controls::energy_saver();
+            let night = services::quick_controls::night_light();
+            let airplane = services::quick_controls::airplane();
+            services::quick_controls::refresh_bluetooth();
+            services::quick_controls::refresh_airplane();
+            let changed = self.bluetooth != bt || self.energy_saver != saver || self.night_light != night || self.airplane != airplane;
+            self.bluetooth = bt; self.energy_saver = saver; self.night_light = night; self.airplane = airplane;
+            if changed && self.bluetooth_open { self.layout(); }
+            return changed || devices_changed || action_changed || message_changed || scanning_changed;
+        }
         if id == TIMER_WIFI_ANIMATE {
             let (next, done) = animate_wifi(self.wifi_progress, self.wifi_open);
             self.wifi_progress = next;
@@ -569,7 +760,7 @@ impl View for QuickSettingsView {
     }
 
     fn deactivated(&mut self) -> bool {
-        self.drag.is_none()
+        self.drag.is_none() && !services::quick_controls::bluetooth_device_busy()
     }
 }
 

@@ -15,6 +15,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::rc::Rc;
+use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
@@ -61,16 +63,66 @@ const TRIGGER_PX: i32 = 2;
 const TIMER_ANIMATE: usize = 1;
 const TIMER_PREVIEW: usize = 2;
 const TIMER_HIDE: usize = 3;
-const FRAME_MS: u32 = 15;
+const FALLBACK_FRAME_MS: u32 = 10;
 const PREVIEW_DELAY_MS: u32 = 500;
 const HIDE_DELAY_MS: u32 = 600;
-/// Fraction of the remaining distance covered per animation frame.
+/// Fraction of the remaining distance covered in the original 15 ms frame.
 const EASE: f32 = 0.23;
 const SHELF_RADIUS: f32 = 14.0;
 
-fn smooth_pointer(current: &mut f32, target: f32) {
-    *current += (target - *current) * EASE;
+fn easing_for(elapsed: Duration) -> f32 {
+    let seconds = elapsed.as_secs_f32().clamp(0.0, 0.1);
+    1.0 - (1.0 - EASE).powf(seconds / 0.015)
+}
+
+fn smooth_pointer(current: &mut f32, target: f32, amount: f32) {
+    *current += (target - *current) * amount;
     if (target - *current).abs() < 0.5 { *current = target; }
+}
+
+static NEXT_FRAME_GENERATION: AtomicUsize = AtomicUsize::new(1);
+
+struct FrameClock {
+    running: Arc<AtomicBool>,
+    queued: Arc<AtomicBool>,
+    generation: usize,
+}
+
+impl FrameClock {
+    fn start(hwnd: HWND, hz: u32) -> Option<Self> {
+        use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, SetWaitableTimer, TIMER_ALL_ACCESS, WaitForSingleObject};
+        use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        let running = Arc::new(AtomicBool::new(true));
+        let queued = Arc::new(AtomicBool::new(false));
+        let generation = NEXT_FRAME_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let (worker_running, worker_queued) = (running.clone(), queued.clone());
+        let target = hwnd.0 as isize;
+        let period = Duration::from_secs_f64(1.0 / f64::from(hz.clamp(30, 360)));
+        std::thread::Builder::new().name("wdock-animation".into()).spawn(move || {
+            let timer = unsafe { CreateWaitableTimerExW(None, windows::core::PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0) }.ok();
+            let due = -((period.as_nanos().saturating_add(50) / 100).max(1) as i64);
+            while worker_running.load(Ordering::Acquire) {
+                if let Some(timer) = timer {
+                    if unsafe { SetWaitableTimer(timer, &due, 0, None, None, false) }.is_ok() {
+                        if unsafe { WaitForSingleObject(timer, u32::MAX) } != WAIT_OBJECT_0 { break; }
+                    } else { std::thread::sleep(period); }
+                } else { std::thread::sleep(period); }
+                if !worker_running.load(Ordering::Acquire) { break; }
+                if !worker_queued.swap(true, Ordering::AcqRel)
+                    && unsafe { PostMessageW(Some(HWND(target as *mut _)), bar::WM_APP_ANIMATION_FRAME, WPARAM(generation), LPARAM(0)) }.is_err() {
+                    break;
+                }
+            }
+            if let Some(timer) = timer { let _ = unsafe { CloseHandle(timer) }; }
+        }).ok()?;
+        Some(Self { running, queued, generation })
+    }
+}
+
+impl Drop for FrameClock {
+    fn drop(&mut self) { self.running.store(false, Ordering::Release); }
 }
 
 /// Where the shelf should be, shared from the overlay that lays it out.
@@ -231,6 +283,9 @@ pub struct Dock {
     zoom: f32,
     reveal: f32,
     animating: bool,
+    frame_clock: Option<FrameClock>,
+    frame_time: Option<Instant>,
+    refresh_hz: u32,
     overlapped: bool,
 }
 
@@ -261,6 +316,9 @@ impl Dock {
             zoom: 0.0,
             reveal: if config.auto_hide == AutoHide::On { 0.0 } else { 1.0 },
             animating: false,
+            frame_clock: None,
+            frame_time: None,
+            refresh_hz: crate::platform::monitors::refresh_hz(monitor.handle),
             overlapped: false,
         };
         dock.refresh();
@@ -527,13 +585,20 @@ impl Dock {
         let settled = self.zoom == self.zoom_target() && self.reveal == self.reveal_target() && pointer_settled;
         if !settled && !self.animating && !self.hwnd.is_invalid() {
             self.animating = true;
-            unsafe { SetTimer(Some(self.hwnd), TIMER_ANIMATE, FRAME_MS, None) };
+            self.frame_time = Some(Instant::now());
+            self.frame_clock = FrameClock::start(self.hwnd, self.refresh_hz);
+            if self.frame_clock.is_none() {
+                unsafe { SetTimer(Some(self.hwnd), TIMER_ANIMATE, FALLBACK_FRAME_MS, None) };
+            }
         }
     }
 
     fn step_animation(&mut self) -> bool {
+        let now = Instant::now();
+        let elapsed = self.frame_time.replace(now).map_or(Duration::from_millis(15), |last| now.saturating_duration_since(last));
+        let amount = easing_for(elapsed);
         let approach = |value: &mut f32, target: f32| {
-            *value += (target - *value) * EASE;
+            *value += (target - *value) * amount;
             if (target - *value).abs() < 0.01 {
                 *value = target;
             }
@@ -541,7 +606,7 @@ impl Dock {
         let (zoom, reveal) = (self.zoom_target(), self.reveal_target());
         approach(&mut self.zoom, zoom);
         if let (Some(pointer), Some(x)) = (self.pointer, &mut self.hover_x) {
-            smooth_pointer(x, pointer.x as f32);
+            smooth_pointer(x, pointer.x as f32, amount);
         }
         // Reveal slides in faster than it slides out.
         if reveal > self.reveal {
@@ -556,6 +621,8 @@ impl Dock {
         };
         if self.zoom == zoom && self.reveal == reveal && pointer_settled {
             self.animating = false;
+            self.frame_clock = None;
+            self.frame_time = None;
             if self.pointer.is_none() { self.hover_x = None; }
             unsafe {
                 let _ = KillTimer(Some(self.hwnd), TIMER_ANIMATE);
@@ -648,6 +715,10 @@ impl Dock {
         }
         if let Some(launch_target) = model.entry_launch(&entry).map(str::to_owned) {
             let label = if entry.windows.is_empty() { "Open" } else { "New window" };
+            if launch::supports_elevation(&launch_target) {
+                let admin_target = launch_target.clone();
+                items.push(MenuItem::action("Run as administrator", move || launch::open_as_admin(&admin_target)));
+            }
             items.push(MenuItem::action(label, move || launch::open(&launch_target)));
         }
         let target = self.model.clone();
@@ -672,7 +743,10 @@ impl Dock {
             let windows = entry.windows.clone();
             items.push(MenuItem::action(label, move || windows.iter().for_each(|&w| wininfo::close(w))));
             if wininfo::end_task_enabled() {
-                let targets: Vec<_> = entry.windows.iter().map(|&hwnd| (hwnd, wininfo::content_process_id(hwnd))).collect();
+                let mut targets: Vec<_> = entry.windows.iter().map(|&hwnd| (hwnd, wininfo::content_process_id(hwnd))).collect();
+                // File Explorer shares its process with the shell. The most recently
+                // used window is the only one End task should close in that case.
+                if let Some(recent) = entry.recent { targets.sort_by_key(|(hwnd, _)| *hwnd != recent); }
                 items.push(MenuItem::action("End task", move || wininfo::end_tasks(&targets)));
             }
         }
@@ -788,17 +862,61 @@ mod tests {
         let mut x = 0.0;
         for _ in 0..100 {
             let previous = x;
-            super::smooth_pointer(&mut x, 300.0);
+            super::smooth_pointer(&mut x, 300.0, super::easing_for(std::time::Duration::from_millis(15)));
             assert!(x >= previous && x <= 300.0);
             if x == 300.0 { break; }
         }
         assert_eq!(x, 300.0);
+    }
+
+    #[test]
+    fn easing_depends_on_elapsed_time_not_refresh_rate() {
+        fn advance(frame: std::time::Duration, count: usize) -> f32 {
+            let mut value = 0.0;
+            for _ in 0..count { value += (1.0 - value) * super::easing_for(frame); }
+            value
+        }
+        let at_60 = advance(std::time::Duration::from_nanos(16_666_667), 6);
+        let at_144 = advance(std::time::Duration::from_nanos(6_944_444), 14);
+        let expected_144 = advance(std::time::Duration::from_nanos(6_944_444), 15);
+        assert!(at_144 < at_60 && expected_144 > at_60);
+        assert!((at_60 - advance(std::time::Duration::from_nanos(8_333_333), 12)).abs() < 0.0001);
+        let at_60_full = advance(std::time::Duration::from_nanos(16_666_667), 60);
+        let at_144_full = advance(std::time::Duration::from_nanos(6_944_444), 144);
+        assert!((at_60_full - at_144_full).abs() < 0.0001);
+    }
+
+    #[test]
+    #[ignore = "queries the interactive display and high-resolution Windows timer"]
+    fn display_rate_and_frame_timer_are_available() {
+        use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, SetWaitableTimer, TIMER_ALL_ACCESS, WaitForSingleObject};
+        let monitors = crate::platform::monitors::enumerate();
+        assert!(!monitors.is_empty());
+        for monitor in monitors { assert!((30..=360).contains(&crate::platform::monitors::refresh_hz(monitor.handle))); }
+        let timer = unsafe { CreateWaitableTimerExW(None, windows::core::PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0) }.expect("high-resolution timer");
+        unsafe { SetWaitableTimer(timer, &-10_000, 0, None, None, false) }.expect("arm timer");
+        let result = unsafe { WaitForSingleObject(timer, 500) };
+        let _ = unsafe { CloseHandle(timer) };
+        assert_eq!(result, WAIT_OBJECT_0);
     }
 }
 
 impl View for Dock {
     fn attach(&mut self, hwnd: HWND) {
         self.hwnd = hwnd;
+    }
+
+    fn destroy(&mut self) {
+        self.frame_clock = None;
+        self.frame_time = None;
+    }
+
+    fn animation_frame(&mut self, generation: usize) -> bool {
+        let Some(clock) = &self.frame_clock else { return false; };
+        if clock.generation != generation { return false; }
+        clock.queued.store(false, Ordering::Release);
+        if self.animating { self.step_animation() } else { false }
     }
 
     fn frame(&self) -> Option<RECT> {
@@ -955,13 +1073,14 @@ impl View for Dock {
             return true;
         }
         let hover = self.hit(p);
-        if std::mem::replace(&mut self.hover, hover) != hover {
+        let hover_changed = std::mem::replace(&mut self.hover, hover) != hover;
+        if hover_changed {
             self.hover_changed();
         }
-        self.relayout();
-        self.sync_shelf();
         self.animate();
-        true
+        // Motion is laid out on the display-paced animation frame. Only a
+        // changed hovered item needs an immediate label/hover repaint.
+        hover_changed
     }
 
     fn mouse_leave(&mut self) -> bool {

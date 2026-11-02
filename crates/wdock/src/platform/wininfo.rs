@@ -17,7 +17,7 @@ use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegGetValueW, RRF_RT_R
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GA_ROOT, GA_ROOTOWNER, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
-    GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
     IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
     SwitchToThisWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
@@ -113,19 +113,55 @@ pub fn end_task_enabled() -> bool {
         w!("TaskbarEndTask"), RRF_RT_REG_DWORD, None, Some((&raw mut value).cast()), Some(&mut size)).is_ok() && value != 0 }
 }
 
-/// Terminate only processes still owning the windows captured when the menu opened.
+fn explorer_image(path: &str) -> bool {
+    path.rsplit(['\\', '/']).next().is_some_and(|name| name.eq_ignore_ascii_case("explorer.exe"))
+}
+
+/// Close the most recently used Explorer window, and terminate other captured processes.
+/// Never terminate an unidentified process: it could be the Windows shell.
 pub fn end_tasks(targets: &[(HWND, u32)]) {
     let mut handled = Vec::new();
+    let mut explorer_closed = false;
+    let shell_pid = process_id(unsafe { GetShellWindow() });
     for &(hwnd, pid) in targets {
-        if pid == 0 || pid == unsafe { GetCurrentProcessId() } || handled.contains(&pid) || content_process_id(hwnd) != pid { continue; }
-        handled.push(pid);
-        match unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) } {
-            Ok(handle) => unsafe {
-                if let Err(error) = TerminateProcess(handle, 1) { log::warn!("could not end task {pid}: {error}"); }
-                let _ = CloseHandle(handle);
-            },
+        if pid == 0 || pid == unsafe { GetCurrentProcessId() } || content_process_id(hwnd) != pid { continue; }
+        if pid == shell_pid || matches!(class_name(hwnd).as_str(), "CabinetWClass" | "ExploreWClass") {
+            if !explorer_closed { close(hwnd); explorer_closed = true; }
+            continue;
+        }
+        if handled.contains(&pid) { continue; }
+        match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, false, pid) } {
+            Ok(handle) => {
+                let mut path = [0u16; 1024];
+                let mut len = path.len() as u32;
+                let image = unsafe { QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(path.as_mut_ptr()), &mut len) };
+                if image.is_err() {
+                    log::warn!("could not identify task {pid}; skipping termination");
+                } else if explorer_image(&String::from_utf16_lossy(&path[..len as usize])) {
+                    // A single Explorer process can own multiple windows and the taskbar.
+                    if !explorer_closed { close(hwnd); explorer_closed = true; }
+                } else if content_process_id(hwnd) == pid {
+                    handled.push(pid);
+                    if let Err(error) = unsafe { TerminateProcess(handle, 1) } { log::warn!("could not end task {pid}: {error}"); }
+                }
+                let _ = unsafe { CloseHandle(handle) };
+            }
             Err(error) => log::warn!("could not open task {pid} for termination: {error}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod end_task_tests {
+    use super::explorer_image;
+
+    #[test]
+    fn explorer_is_identified_case_insensitively_for_any_path() {
+        assert!(explorer_image(r"C:\Windows\explorer.exe"));
+        assert!(explorer_image(r"c:\WINDOWS\EXPLORER.EXE"));
+        assert!(explorer_image("C:/Windows/explorer.exe"));
+        assert!(!explorer_image(r"C:\Apps\my-explorer.exe"));
+        assert!(!explorer_image(r"C:\Apps\explorer.exe.backup"));
     }
 }
 
@@ -165,6 +201,12 @@ pub fn explicit_aumid(hwnd: HWND) -> Option<String> {
     }
 }
 
+fn version_string(text: &[u16]) -> Option<String> {
+    let end = text.iter().position(|&ch| ch == 0).unwrap_or(text.len());
+    let text = String::from_utf16_lossy(&text[..end]).trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
 /// The version resource's FileDescription, e.g. "Google Chrome" for chrome.exe.
 pub fn file_description(exe: &str) -> Option<String> {
     let path = HSTRING::from(exe);
@@ -189,9 +231,35 @@ pub fn file_description(exe: &str) -> Option<String> {
         if !VerQueryValueW(data.as_ptr().cast(), PCWSTR(query.as_ptr()), &mut ptr, &mut len).as_bool() || len == 0 {
             return None;
         }
-        let text = std::slice::from_raw_parts(ptr as *const u16, len as usize);
-        let text = String::from_utf16_lossy(text).trim_end_matches('\0').trim().to_owned();
-        (!text.is_empty()).then_some(text)
+        // Some version resources report a length that includes the next field.
+        // Keep the read inside the version buffer and stop at the first NUL.
+        let start = data.as_ptr() as usize;
+        let end = start.checked_add(data.len())?;
+        let value = ptr as usize;
+        if value < start || value >= end || !value.is_multiple_of(std::mem::align_of::<u16>()) { return None; }
+        let available = (end - value) / size_of::<u16>();
+        let text = std::slice::from_raw_parts(ptr as *const u16, (len as usize).min(available));
+        version_string(text)
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::version_string;
+
+    #[test]
+    fn description_stops_at_first_null_even_when_resource_length_is_too_long() {
+        let value: Vec<u16> = "Spotify\0\u{0038}\u{0001}\u{0002}FileV".encode_utf16().collect();
+        assert_eq!(version_string(&value).as_deref(), Some("Spotify"));
+        assert_eq!(version_string(&[0, 65]), None);
+        assert_eq!(version_string(&"  Example  ".encode_utf16().collect::<Vec<_>>()).as_deref(), Some("Example"));
+    }
+
+    #[test]
+    #[ignore = "reads the installed Spotify executable"]
+    fn installed_spotify_description_has_no_version_resource_suffix() {
+        let path = std::path::PathBuf::from(std::env::var_os("APPDATA").expect("APPDATA")).join(r"Spotify\Spotify.exe");
+        assert_eq!(super::file_description(&path.to_string_lossy()).as_deref(), Some("Spotify"));
     }
 }
 
@@ -233,7 +301,8 @@ pub fn is_fullscreen(hwnd: HWND) -> bool {
     let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-        if !exists(hwnd) || style & WS_CAPTION.0 == WS_CAPTION.0 || is_minimized(hwnd) {
+        if !exists(hwnd) || !IsWindowVisible(hwnd).as_bool() || is_cloaked(hwnd)
+            || style & WS_CAPTION.0 == WS_CAPTION.0 || is_minimized(hwnd) {
             return false;
         }
         if !GetMonitorInfoW(monitor(hwnd), &mut info).as_bool() {

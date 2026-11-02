@@ -33,7 +33,7 @@ pub fn refresh() {
 
 // winvd 0.0.49 targets the shell interface introduced in Windows 11
 // 24H2 build 26100.2605. Do not call a potentially incompatible COM vtable.
-fn supported_windows() -> bool {
+pub(crate) fn supported_windows() -> bool {
     let key = w!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
     let mut build = [0u16; 32];
     let mut size = std::mem::size_of_val(&build) as u32;

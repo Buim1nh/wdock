@@ -1,7 +1,7 @@
 //! Notification-area icons registered with our `Shell_TrayWnd`, following
 //! explorer's semantics: icons are identified by GUID when given, otherwise by
-//! (owner window, uID); NIM_ADD of an existing icon and NIM_MODIFY of an
-//! unknown one fail so the app falls back to the other call.
+//! (owner window, uID). NVIDIA's complete Display Mode updates can restore its
+//! icon after the application misses a taskbar recreation notification.
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Imaging::IWICBitmapSource;
@@ -113,7 +113,8 @@ impl TrayModel {
         let index = self.find(&data);
         let mut applied = Applied::default();
         match (message.command, index) {
-            (TrayCommand::Add, None) => {
+            (TrayCommand::Add, None) | (TrayCommand::Modify, None)
+                if message.command == TrayCommand::Add || self.can_restore_from_modify(&data) => {
                 let mut icon = TrayIcon {
                     id: self.next_id,
                     hwnd: data.hwnd,
@@ -161,11 +162,32 @@ impl TrayModel {
         applied
     }
 
+    /// NVIDIA's Display Mode producer can keep modifying its last icon after a
+    /// taskbar restart. Do not create arbitrary icons from updates: applications
+    /// rely on an unknown NIM_MODIFY failing and may send stale data.
+    fn can_restore_from_modify(&self, data: &NotifyIconData) -> bool {
+        let required = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+        data.flags & required == required
+            && data.hwnd != 0 && (self.env.is_window)(data.hwnd)
+            && data.callback_message != 0 && data.hicon != 0
+            && data.guid.is_some()
+            && data.tip.trim().eq_ignore_ascii_case("Manage Display mode")
+            && matches!(crate::model::tray_hidden::exe_name(&(self.env.exe_of)(data.hwnd)).to_ascii_lowercase().as_str(), "" | "nvcontainer.exe" | "nvdisplay.container.exe")
+    }
+
     /// Applies the fields selected by `flags`. Returns whether anything visible
     /// changed (apps such as G HUB re-send the same icon every second) and a
     /// balloon to show, if any.
     fn update(&self, icon: &mut TrayIcon, data: &NotifyIconData) -> (bool, Option<Balloon>) {
-        let before = (icon.callback, icon.image_hash, icon.tip.clone(), icon.show_tip, icon.hidden);
+        let before = (icon.hwnd, icon.uid, icon.callback, icon.image_hash, icon.tip.clone(), icon.show_tip, icon.hidden);
+        // GUID icons may be recreated by a different owner window. Keeping the
+        // old HWND makes pruning delete the icon and sends clicks to a dead window.
+        if icon.guid.is_some() && data.hwnd != 0 && data.hwnd != icon.hwnd && (self.env.is_window)(data.hwnd) {
+            icon.hwnd = data.hwnd;
+            icon.uid = data.uid;
+            icon.exe = (self.env.exe_of)(data.hwnd);
+            icon.screen_rect = None;
+        }
         if data.flags & NIF_MESSAGE != 0 {
             icon.callback = data.callback_message;
         }
@@ -189,7 +211,7 @@ impl TrayModel {
         if data.flags & NIF_STATE != 0 && data.state_mask & NIS_HIDDEN != 0 {
             icon.hidden = data.state & NIS_HIDDEN != 0;
         }
-        let changed = before != (icon.callback, icon.image_hash, icon.tip.clone(), icon.show_tip, icon.hidden)
+        let changed = before != (icon.hwnd, icon.uid, icon.callback, icon.image_hash, icon.tip.clone(), icon.show_tip, icon.hidden)
             || (data.flags & NIF_ICON != 0 && !same_handle && icon.image_hash == 0);
         let balloon = (data.flags & NIF_INFO != 0 && !data.info.is_empty()).then(|| Balloon {
             icon_id: icon.id,
@@ -219,7 +241,11 @@ impl TrayModel {
         let explicit = |i: &TrayIcon| self.shown.iter().any(|h| h.matches(&i.exe, i.guid));
         let preferred = |i: &TrayIcon| explicit(i) || self.windows_preference(i) == Some(true);
         let forced = |i: &TrayIcon| self.hidden_by_user(i)
-            || (!explicit(i) && overflow.iter().any(|p| !p.is_empty() && i.exe.contains(&p.to_lowercase())));
+            || (!explicit(i) && overflow.iter().any(|p| !p.is_empty() && i.exe.contains(&p.to_lowercase())))
+            // A newly discovered or ambiguous icon is hidden by default in
+            // Windows; don't silently promote it to the bar. When Windows
+            // preferences cannot be read, retain the configured limit fallback.
+            || (!explicit(i) && !self.windows_preferences.is_empty() && self.windows_preference(i).is_none());
         let reserved = visible.iter().filter(|i| preferred(i) && !forced(i)).count();
         let mut available = max_visible.saturating_sub(reserved);
         let (mut bar, mut extra) = (Vec::new(), Vec::new());
@@ -361,7 +387,67 @@ mod tests {
         modify.data.guid = Some([7; 16]);
         modify.data.tip = "moved".into();
         assert!(tray.apply(modify).ok);
-        assert_eq!(tray.find_by(0, 0, Some([7; 16])).unwrap().tip, "moved");
+        let icon = tray.find_by(0, 0, Some([7; 16])).unwrap();
+        assert_eq!(icon.tip, "moved");
+        assert_eq!((icon.hwnd, icon.uid, icon.exe.as_str()), (2, 9, "app2.exe"));
+    }
+
+    #[test]
+    fn complete_update_restores_icon_when_producer_misses_taskbar_restart() {
+        let mut tray = TrayModel::new(TrayEnv { exe_of: |_| r"C:\Program Files\NVIDIA Corporation\NvContainer\nvcontainer.exe".to_owned(), ..env() });
+        let mut update = msg(TrayCommand::Modify, 5, 0, NIF_GUID | NIF_ICON | NIF_MESSAGE | NIF_TIP);
+        update.data.guid = Some([3; 16]);
+        update.data.hicon = 12;
+        update.data.callback_message = 0x8010;
+        update.data.tip = "Manage Display mode".into();
+        assert!(tray.apply(update.clone()).ok);
+        let icon = tray.find_by(0, 0, Some([3; 16])).unwrap();
+        assert_eq!((icon.hwnd, icon.callback, icon.tip.as_str()), (5, 0x8010, "Manage Display mode"));
+        let id = icon.id;
+        assert!(tray.apply(update).ok);
+        assert_eq!(tray.find_by(0, 0, Some([3; 16])).unwrap().id, id);
+        assert_eq!(tray.split(0, &[]).1.len(), 1);
+    }
+
+    #[test]
+    fn incomplete_or_dead_owner_update_does_not_create_icon() {
+        let mut tray = TrayModel::new(TrayEnv { exe_of: |_| "nvcontainer.exe".into(), ..env() });
+        let mut update = msg(TrayCommand::Modify, 5, 0, NIF_ICON | NIF_MESSAGE);
+        update.data.hicon = 12;
+        assert!(!tray.apply(update.clone()).ok, "callback is required");
+        update.data.callback_message = 0x8010;
+        update.data.flags |= NIF_GUID | NIF_TIP;
+        update.data.guid = Some([8; 16]);
+        update.data.tip = "Manage Display mode".into();
+        update.data.hwnd = 99;
+        assert!(!tray.apply(update).ok, "owner must still exist");
+        assert!(tray.split(10, &[]).0.is_empty());
+    }
+
+    #[test]
+    fn unrelated_complete_update_does_not_create_a_ghost_icon() {
+        let mut tray = TrayModel::new(env());
+        let mut update = msg(TrayCommand::Modify, 5, 1, NIF_GUID | NIF_ICON | NIF_MESSAGE | NIF_TIP);
+        update.data.guid = Some([9; 16]);
+        update.data.hicon = 12;
+        update.data.callback_message = 0x8010;
+        update.data.tip = "Other application".into();
+        assert!(!tray.apply(update).ok);
+        assert!(tray.split(10, &[]).0.is_empty());
+    }
+
+    #[test]
+    fn guid_owner_is_rebound_before_pruning_old_window() {
+        let mut tray = TrayModel::new(env());
+        let mut add = msg(TrayCommand::Add, 99, 0, NIF_GUID);
+        add.data.guid = Some([4; 16]);
+        assert!(tray.apply(add).ok);
+        let mut update = msg(TrayCommand::Modify, 5, 0, NIF_GUID | NIF_TIP);
+        update.data.guid = Some([4; 16]);
+        update.data.tip = "Manage Display mode".into();
+        assert!(tray.apply(update).changed);
+        assert!(!tray.prune());
+        assert_eq!(tray.find_by(0, 0, Some([4; 16])).unwrap().hwnd, 5);
     }
 
     #[test]
@@ -434,6 +520,20 @@ mod tests {
         assert_eq!(tray.split(1, &[]).0.len(), 2, "explicitly shown icons are not lost to the limit");
         tray.set_icon_hidden(id, true);
         assert_eq!(tray.split(1, &[]).1[0].exe, "app1.exe");
+    }
+
+    #[test]
+    fn unknown_icons_stay_in_overflow_when_windows_preferences_exist() {
+        let mut tray = TrayModel::new(env());
+        tray.apply(msg(TrayCommand::Add, 1, 7, 0));
+        tray.apply(msg(TrayCommand::Add, 2, 8, 0));
+        tray.set_windows_preferences(vec![Preference { exe: "app1.exe".into(), guid: None, uid: Some(7), promoted: true }]);
+        let (bar, extra) = tray.split(12, &[]);
+        assert_eq!(bar.iter().map(|i| i.exe.as_str()).collect::<Vec<_>>(), ["app1.exe"]);
+        assert_eq!(extra.iter().map(|i| i.exe.as_str()).collect::<Vec<_>>(), ["app2.exe"]);
+        let id = tray.find_by(2, 8, None).unwrap().id;
+        tray.set_icon_hidden(id, false);
+        assert_eq!(tray.split(12, &[]).0.len(), 2, "explicitly shown icons remain on the bar");
     }
 
     #[test]
