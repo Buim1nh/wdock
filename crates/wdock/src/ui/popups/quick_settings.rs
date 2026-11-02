@@ -6,6 +6,7 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
@@ -317,6 +318,13 @@ impl View for QuickSettingsView {
         ) else {
             return;
         };
+        for format in [&normal, &right_aligned] {
+            let trimming = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, ..Default::default() };
+            unsafe {
+                let sign = cx.gfx.dwrite.CreateEllipsisTrimmingSign(format).ok();
+                let _ = format.SetTrimming(&trimming, sign.as_ref());
+            }
+        }
         let fill = |r: D2D_RECT_F, radius: f32, color| {
             if let Ok(brush) = cx.gfx.brush(color) {
                 unsafe { cx.dc.FillRoundedRectangle(&rounded(r, radius), &brush) };
