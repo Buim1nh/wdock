@@ -6,6 +6,7 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
@@ -49,6 +50,12 @@ enum Hit {
     Network,
     Wifi(WifiHit),
     Mute,
+    MicMute,
+    Microphone,
+    InputToggle,
+    Input(usize),
+    Camera,
+    CameraSettings,
     Volume,
     OutputToggle,
     Output(usize),
@@ -89,6 +96,8 @@ pub struct QuickSettingsView {
     confirm: Option<SessionAction>,
     outputs: Vec<Output>,
     outputs_open: bool,
+    inputs: Vec<Output>,
+    inputs_open: bool,
     /// The Wi-Fi list; `Some` (and scanning) only while expanded.
     wifi: Option<WifiPanel>,
     wifi_open: bool,
@@ -111,6 +120,8 @@ impl QuickSettingsView {
             confirm: None,
             outputs: services::audio_outputs(),
             outputs_open: false,
+            inputs: services::microphone_inputs(),
+            inputs_open: false,
             wifi: None,
             wifi_open: false,
             wifi_progress: 0.0,
@@ -144,6 +155,10 @@ impl QuickSettingsView {
                 targets.push((Hit::Mute, button));
                 targets.push((Hit::OutputToggle, rect(left + 70.0 * s, *y - LABEL * s, right, *y)));
             }
+            if hit == Hit::Microphone {
+                targets.push((Hit::MicMute, button));
+                targets.push((Hit::InputToggle, rect(left + 94.0 * s, *y - LABEL * s, right, *y)));
+            }
             let track = rect(button.right + 10.0 * s, *y, right - 40.0 * s, *y + SLIDER_ROW * s);
             targets.push((hit, track));
             tracks.push((hit, track));
@@ -159,6 +174,19 @@ impl QuickSettingsView {
                 y += GAP * s;
             }
         }
+        if self.status.microphone.is_some() {
+            slider(Hit::Microphone, &mut y, &mut self.targets, &mut self.tracks);
+            if self.inputs_open {
+                for i in 0..self.inputs.len() {
+                    self.targets.push((Hit::Input(i), rect(left, y, right, y + OUTPUT_ROW * s)));
+                    y += OUTPUT_ROW * s;
+                }
+                y += GAP * s;
+            }
+        }
+        self.targets.push((Hit::Camera, rect(left, y, right - 38.0 * s, y + 34.0 * s)));
+        self.targets.push((Hit::CameraSettings, rect(right - 34.0 * s, y, right, y + 34.0 * s)));
+        y += 44.0 * s;
         for i in 0..self.status.displays.len() {
             slider(Hit::Brightness(i), &mut y, &mut self.targets, &mut self.tracks);
         }
@@ -198,6 +226,7 @@ impl QuickSettingsView {
         }
         match slider {
             Hit::Volume => self.status.volume.map_or(0.0, |v| if v.muted { 0.0 } else { v.level }),
+            Hit::Microphone => self.status.microphone.map_or(0.0, |v| v.level),
             Hit::Brightness(i) => self.status.displays.get(i).map_or(0.0, |d| f32::from(d.percent) / 100.0),
             _ => 0.0,
         }
@@ -215,6 +244,7 @@ impl QuickSettingsView {
         let (slider, value) = (drag.slider, drag.value);
         match slider {
             Hit::Volume => services::set_volume(value),
+            Hit::Microphone => services::set_microphone_level(value),
             Hit::Brightness(i) => self.write_brightness(i, value, false),
             _ => {}
         }
@@ -263,6 +293,7 @@ impl View for QuickSettingsView {
         }
         if status.audio_devices != self.status.audio_devices {
             self.outputs = services::audio_outputs();
+            self.inputs = services::microphone_inputs();
         }
         self.status = status;
         self.layout();
@@ -287,6 +318,13 @@ impl View for QuickSettingsView {
         ) else {
             return;
         };
+        for format in [&normal, &right_aligned] {
+            let trimming = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, ..Default::default() };
+            unsafe {
+                let sign = cx.gfx.dwrite.CreateEllipsisTrimmingSign(format).ok();
+                let _ = format.SetTrimming(&trimming, sign.as_ref());
+            }
+        }
         let fill = |r: D2D_RECT_F, radius: f32, color| {
             if let Ok(brush) = cx.gfx.brush(color) {
                 unsafe { cx.dc.FillRoundedRectangle(&rounded(r, radius), &brush) };
@@ -326,27 +364,37 @@ impl View for QuickSettingsView {
                     let level = self.slider_value(Hit::Volume);
                     text::draw(cx, glyphs::volume(level, muted), &icon, r, theme.text);
                 }
-                Hit::OutputToggle => {
-                    if let Some(current) = self.outputs.iter().find(|o| o.default) {
+                Hit::MicMute => {
+                    fill(r, 15.0 * s, plate_color(hit));
+                    let muted = self.status.microphone.is_some_and(|v| v.muted);
+                    text::draw(cx, if muted { glyphs::MIC_MUTED } else { glyphs::MIC }, &icon, r, if muted { theme.text_dim } else { theme.text });
+                }
+                Hit::Camera | Hit::CameraSettings => {
+                    fill(r, 12.0 * s, plate_color(hit));
+                    text::draw(cx, if hit == Hit::Camera { glyphs::CAMERA } else { glyphs::SETTINGS }, &icon, rect(r.left, r.top, r.left + 34.0 * s, r.bottom), theme.text);
+                    if hit == Hit::Camera { text::draw(cx, "Camera preview", &normal, rect(r.left + 36.0 * s, r.top, r.right, r.bottom), theme.text); }
+                }
+                Hit::InputToggle | Hit::OutputToggle => {
+                    if let Some(current) = (if hit == Hit::InputToggle { &self.inputs } else { &self.outputs }).iter().find(|o| o.default) {
                         let color = if self.hot == Some(hit) { theme.text } else { theme.text_dim };
                         text::draw(cx, &current.name, &right_aligned, rect(r.left, r.top, r.right - 22.0 * s, r.bottom), color);
-                        let chevron = if self.outputs_open { glyphs::CHEVRON_UP } else { glyphs::CHEVRON_DOWN };
+                        let chevron = if if hit == Hit::InputToggle { self.inputs_open } else { self.outputs_open } { glyphs::CHEVRON_UP } else { glyphs::CHEVRON_DOWN };
                         text::draw(cx, chevron, &icon, rect(r.right - 20.0 * s, r.top, r.right, r.bottom), color);
                     }
                 }
-                Hit::Output(i) => {
-                    let Some(output) = self.outputs.get(i) else {
+                Hit::Input(i) | Hit::Output(i) => {
+                    let Some(output) = (if matches!(hit, Hit::Input(_)) { &self.inputs } else { &self.outputs }).get(i) else {
                         continue;
                     };
                     if self.hot == Some(hit) {
                         fill(r, 8.0 * s, theme.hover);
                     }
-                    let glyph = match output.kind {
+                    let glyph = if matches!(hit, Hit::Input(_)) { glyphs::MIC } else { match output.kind {
                         OutputKind::Headphones => glyphs::HEADPHONES,
                         OutputKind::Bluetooth => glyphs::BLUETOOTH,
                         OutputKind::Display => glyphs::DISPLAY,
                         OutputKind::Speakers | OutputKind::Other => glyphs::SPEAKER,
-                    };
+                    }};
                     text::draw(cx, glyph, &icon, rect(r.left, r.top, r.left + 30.0 * s, r.bottom), theme.text);
                     let name_color = if output.default { theme.accent } else { theme.text };
                     text::draw(cx, &output.name, &normal, rect(r.left + 36.0 * s, r.top, r.right - 26.0 * s, r.bottom), name_color);
@@ -354,9 +402,10 @@ impl View for QuickSettingsView {
                         text::draw(cx, glyphs::CHECK, &icon, rect(r.right - 26.0 * s, r.top, r.right, r.bottom), theme.accent);
                     }
                 }
-                Hit::Volume | Hit::Brightness(_) => {
+                Hit::Volume | Hit::Microphone | Hit::Brightness(_) => {
                     let label = match hit {
                         Hit::Brightness(i) => self.status.displays.get(i).map_or("Display", |d| d.name.as_str()),
+                        Hit::Microphone => "Microphone",
                         _ => "Sound",
                     };
                     let label_rect = rect(r.left - (ICON_BUTTON + 10.0) * s, r.top - LABEL * s, r.right, r.top);
@@ -450,7 +499,7 @@ impl View for QuickSettingsView {
         if button != Button::Left {
             return false;
         }
-        let Some(slider @ (Hit::Volume | Hit::Brightness(_))) = self.hit(x, y) else {
+        let Some(slider @ (Hit::Volume | Hit::Microphone | Hit::Brightness(_))) = self.hit(x, y) else {
             return false;
         };
         unsafe { SetCapture(self.hwnd) };
@@ -490,9 +539,24 @@ impl View for QuickSettingsView {
                     Outcome::Nothing => return false,
                 }
             }
+            Some(Hit::Camera) => { crate::platform::camera::show(); self.close(); }
+            Some(Hit::CameraSettings) => { launch::open("ms-settings:camera"); self.close(); }
+            Some(Hit::MicMute) => services::set_microphone_muted(!self.status.microphone.is_some_and(|v| v.muted)),
+            Some(Hit::InputToggle) => {
+                self.inputs = services::microphone_inputs();
+                self.inputs_open = !self.inputs_open;
+                self.outputs_open = false;
+                self.layout();
+            }
+            Some(Hit::Input(i)) => {
+                if let Some(input) = self.inputs.get(i).filter(|o| !o.default) { services::set_default_microphone(&input.id); }
+                self.inputs_open = false;
+                self.layout();
+            }
             Some(Hit::OutputToggle) => {
                 self.outputs = services::audio_outputs();
                 self.outputs_open = !self.outputs_open;
+                self.inputs_open = false;
                 self.layout();
             }
             Some(Hit::Output(i)) => {
@@ -539,6 +603,7 @@ impl View for QuickSettingsView {
         }
         match self.hit(x, y) {
             Some(Hit::Volume | Hit::Mute) => services::nudge_volume(step),
+            Some(Hit::Microphone | Hit::MicMute) => services::set_microphone_level((self.slider_value(Hit::Microphone) + step).clamp(0.0, 1.0)),
             Some(Hit::Brightness(i)) => {
                 let current = self.slider_value(Hit::Brightness(i));
                 self.write_brightness(i, (current + step).clamp(0.0, 1.0), true);
@@ -575,7 +640,28 @@ impl View for QuickSettingsView {
 
 #[cfg(test)]
 mod tests {
-    use super::animate_wifi;
+    use super::*;
+
+    #[test]
+    fn microphone_controls_do_not_overlap_at_fractional_dpi() {
+        for scale in [1.0, 1.25, 1.5] {
+            let mut view = QuickSettingsView::new(RECT::default(), scale);
+            view.status.volume = Some(services::Volume { level: 0.5, muted: false });
+            view.status.microphone = Some(services::Volume { level: 0.7, muted: true });
+            view.inputs = vec![Output { id: "mic".into(), name: "Microphone".into(), kind: OutputKind::Other, default: true }];
+            view.inputs_open = true;
+            view.layout();
+            assert_eq!(view.slider_value(Hit::Microphone), 0.7);
+            for (i, (_, a)) in view.targets.iter().enumerate() {
+                assert!(a.left >= 0.0 && a.right <= WIDTH * scale && a.bottom <= view.height);
+                for (_, b) in &view.targets[i + 1..] {
+                    assert!(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top);
+                }
+            }
+            assert!(view.targets.iter().any(|(hit, _)| *hit == Hit::MicMute));
+            assert!(view.targets.iter().any(|(hit, _)| *hit == Hit::Camera));
+        }
+    }
 
     #[test]
     fn wifi_animation_converges_and_can_reverse() {

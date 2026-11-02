@@ -10,7 +10,8 @@ struct LiveState { title: String, artist: String, lyrics: LiveLyrics, seen: std:
 static LIVE: Mutex<Option<LiveState>> = Mutex::new(None);
 #[derive(Clone, Debug)]
 pub struct TimedLine { pub start: u64, pub text: String, pub words: Vec<(u64, u64, String, bool)> }
-static TIMED: Mutex<Option<(String, String, Vec<TimedLine>, Vec<[u8; 3]>)>> = Mutex::new(None);
+type TimedTrack = (String, String, Vec<TimedLine>, Vec<[u8; 3]>);
+static TIMED: Mutex<Option<TimedTrack>> = Mutex::new(None);
 
 pub fn accept_timed(title: String, artist: String, lines: Vec<TimedLine>, colors: Vec<[u8; 3]>) -> bool {
     let Some(media) = super::media::current() else { return false; };

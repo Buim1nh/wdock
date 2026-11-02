@@ -35,3 +35,7 @@ pub const DISPLAY: &str = "\u{E7F4}";
 pub const CHEVRON_DOWN: &str = "\u{E70D}";
 pub const CHEVRON_UP: &str = "\u{E70E}";
 pub const CHECK: &str = "\u{E73E}";
+
+pub const MIC: &str = "\u{E720}";
+pub const MIC_MUTED: &str = "\u{F781}";
+pub const CAMERA: &str = "\u{E722}";
