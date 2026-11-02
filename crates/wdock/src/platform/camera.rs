@@ -7,9 +7,14 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Media::DirectShow::{IBaseFilter, IBasicVideo, ICaptureGraphBuilder2, ICreateDevEnum, IGraphBuilder, IMediaControl, IVideoWindow};
 use windows::Win32::Media::MediaFoundation::{CLSID_CaptureGraphBuilder2, CLSID_FilterGraph, CLSID_SystemDeviceEnum, CLSID_VideoInputDeviceCategory, MEDIATYPE_Video, PIN_CATEGORY_PREVIEW};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize, IMoniker};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
+use crate::ui::camera_chrome::{Chrome, video_bounds};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+thread_local! { static CHROME: RefCell<Option<Chrome>> = const { RefCell::new(None) }; }
 
 static OPEN: AtomicBool = AtomicBool::new(false);
 thread_local! { static PREVIEW: RefCell<Option<Preview>> = const { RefCell::new(None) }; }
@@ -60,11 +65,8 @@ impl Graph {
         let mut r = RECT::default();
         unsafe {
             if GetClientRect(hwnd, &mut r).is_ok() {
-                let top = (40.0 * scale(hwnd)).round() as i32;
-                let available = (r.bottom - top).max(1);
-                let width = r.right.min((available as f32 * aspect) as i32).max(1);
-                let height = (width as f32 / aspect) as i32;
-                let _ = video.SetWindowPosition((r.right - width) / 2, top + (available - height) / 2, width, height);
+                let r = video_bounds(r.right, r.bottom, scale(hwnd), aspect);
+                let _ = video.SetWindowPosition(r.left, r.top, r.right-r.left, r.bottom-r.top);
             }
         }
     }
@@ -95,11 +97,21 @@ fn start_preview(hwnd: HWND, next: bool) {
     if next { preview.index = (preview.index + 1) % preview.devices.len().max(1); }
     let result = preview.start(hwnd);
     if !unsafe { IsWindow(Some(hwnd)) }.as_bool() { return; }
+    let count = preview.devices.len();
+    let index = preview.index;
+    CHROME.with_borrow_mut(|chrome| { if let Some(chrome) = chrome {
+        chrome.error = result.is_err();
+        chrome.detail = if count == 0 { "No camera connected".into() } else { format!("Camera {} of {}", index+1, count) };
+    } });
     PREVIEW.set(Some(preview));
+    unsafe {
+        if let Ok(next) = GetDlgItem(Some(hwnd), 1) { let _ = windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow(next, count>1); }
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
     unsafe { let _ = PostMessageW(Some(hwnd), SYNC_PREVIEW, WPARAM(0), LPARAM(0)); }
     if let Err(err) = result {
         log::warn!("camera preview unavailable: {err}");
-        unsafe { MessageBoxW(Some(hwnd), w!("Cannot preview this camera. It may be disconnected, in use, or blocked. Open Camera settings to check access, or try the next camera."), w!("wdock camera"), MB_OK | MB_ICONINFORMATION); }
+
     }
 }
 
@@ -120,12 +132,19 @@ fn scale(hwnd: HWND) -> f32 { unsafe { GetDpiForWindow(hwnd).max(96) as f32 / 96
 
 fn toolbar(hwnd: HWND) {
     let s = scale(hwnd);
+    let mut r = RECT::default();
     unsafe {
-        for (id, x, width) in [(1, 8.0, 130.0), (2, 146.0, 150.0)] {
+        if GetClientRect(hwnd, &mut r).is_err() { return; }
+        for (id, x, y, width, height) in [
+            (1, 16.0*s, r.bottom as f32-50.0*s, 136.0*s, 34.0*s),
+            (2, r.right as f32-178.0*s, r.bottom as f32-50.0*s, 162.0*s, 34.0*s),
+            (3, r.right as f32-52.0*s, 14.0*s, 34.0*s, 34.0*s),
+        ] {
             if let Ok(button) = GetDlgItem(Some(hwnd), id) {
-                let _ = MoveWindow(button, (x * s).round() as i32, (6.0 * s).round() as i32, (width * s).round() as i32, (28.0 * s).round() as i32, true);
+                let _ = MoveWindow(button, x.round() as i32, y.round() as i32, width.round() as i32, height.round() as i32, true);
             }
         }
+        let _ = InvalidateRect(Some(hwnd), None, false);
     }
 }
 
@@ -143,11 +162,17 @@ pub fn show() {
     }
 }
 
-fn run() -> Result<()> {
+pub fn run() -> Result<()> {
+    use windows::Win32::UI::HiDpi::{SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?; }
+    let previous_dpi = unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     let result = run_window();
     drop(PREVIEW.take());
-    unsafe { CoUninitialize(); }
+    drop(CHROME.take());
+    unsafe {
+        if !previous_dpi.0.is_null() { SetThreadDpiAwarenessContext(previous_dpi); }
+        CoUninitialize();
+    }
     result
 }
 
@@ -164,12 +189,15 @@ fn run_window() -> Result<()> {
                 if let Some(device) = item[0].take() { devices.push(device); }
             }
         }
+        CHROME.set(Some(Chrome::new()?));
         let instance = GetModuleHandleW(None)?;
         let class = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: instance.into(), lpszClassName: w!("wdock-camera"), hCursor: LoadCursorW(None, IDC_ARROW)?, ..Default::default() };
         RegisterClassW(&class);
-        let hwnd = CreateWindowExW(WINDOW_EX_STYLE::default(), w!("wdock-camera"), w!("wdock — Camera preview"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 680, 480, None, None, Some(instance.into()), None)?;
-        CreateWindowExW(WINDOW_EX_STYLE::default(), w!("BUTTON"), w!("Next camera"), WS_CHILD | WS_VISIBLE | WS_TABSTOP, 8, 6, 130, 28, Some(hwnd), Some(HMENU(std::ptr::without_provenance_mut(1))), Some(instance.into()), None)?;
-        CreateWindowExW(WINDOW_EX_STYLE::default(), w!("BUTTON"), w!("Camera settings"), WS_CHILD | WS_VISIBLE | WS_TABSTOP, 146, 6, 150, 28, Some(hwnd), Some(HMENU(2usize as *mut _)), Some(instance.into()), None)?;
+        let hwnd = CreateWindowExW(WINDOW_EX_STYLE::default(), w!("wdock-camera"), w!("wdock — Camera preview"), WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN, (GetSystemMetrics(SM_CXSCREEN)-720)/2, (GetSystemMetrics(SM_CYSCREEN)-560)/2, 720, 560, None, None, Some(instance.into()), None)?;
+        CreateWindowExW(WINDOW_EX_STYLE::default(), w!("BUTTON"), w!("Next camera"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32), 8, 6, 130, 28, Some(hwnd), Some(HMENU(std::ptr::without_provenance_mut(1))), Some(instance.into()), None)?;
+        CreateWindowExW(WINDOW_EX_STYLE::default(), w!("BUTTON"), w!("Camera settings"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32), 146, 6, 150, 28, Some(hwnd), Some(HMENU(2usize as *mut _)), Some(instance.into()), None)?;
+        CreateWindowExW(WINDOW_EX_STYLE::default(), w!("BUTTON"), w!("Close"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32), 0, 0, 34, 34, Some(hwnd), Some(HMENU(3usize as *mut _)), Some(instance.into()), None)?;
+        CHROME.with_borrow(|c| { if let Some(c) = c { c.decorate(hwnd); } });
         PREVIEW.set(Some(Preview { devices, index: 0, graph: None }));
         toolbar(hwnd);
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -180,6 +208,16 @@ fn run_window() -> Result<()> {
             let result = GetMessageW(&mut msg, None, 0, 0).0;
             if result == -1 { return Err(Error::from_thread()); }
             if result == 0 { break; }
+            if msg.message == WM_KEYDOWN && msg.wParam.0 == 27 {
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                continue;
+            }
+            if msg.message == WM_KEYDOWN && msg.wParam.0 == 13 {
+                let focused = windows::Win32::UI::Input::KeyboardAndMouse::GetFocus();
+                let id = GetDlgCtrlID(focused);
+                if (1..=3).contains(&id) { let _ = PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(id as usize), LPARAM(0)); }
+                continue;
+            }
             if !IsDialogMessageW(hwnd, &msg).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
@@ -191,6 +229,33 @@ fn run_window() -> Result<()> {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            unsafe { BeginPaint(hwnd, &mut ps); }
+            let mut r = RECT::default();
+            unsafe { let _ = GetClientRect(hwnd, &mut r); }
+            CHROME.with_borrow_mut(|c| { if let Some(c) = c { c.paint(hwnd,r.right.max(1) as u32,r.bottom.max(1) as u32,scale(hwnd)); } });
+            unsafe { let _ = EndPaint(hwnd,&ps); }
+        }
+        WM_ERASEBKGND => return LRESULT(1),
+        WM_DRAWITEM => {
+            if let Some(item) = unsafe { (lp.0 as *const DRAWITEMSTRUCT).as_ref() } {
+                CHROME.with_borrow(|c| { if let Some(c) = c { c.button(item,scale(hwnd)); } });
+            }
+            return LRESULT(1);
+        }
+        WM_NCHITTEST => {
+            let hit = unsafe { DefWindowProcW(hwnd,msg,wp,lp) };
+            if hit.0 != HTCLIENT as isize { return hit; }
+            let mut r = RECT::default();
+            unsafe { let _ = GetWindowRect(hwnd, &mut r); }
+            let x = (lp.0 as u16 as i16) as i32-r.left;
+            let y = ((lp.0 >> 16) as u16 as i16) as i32-r.top;
+            if y < (64.0*scale(hwnd)) as i32 && x < r.right-r.left-(60.0*scale(hwnd)) as i32 { return LRESULT(HTCAPTION as isize); }
+            return hit;
+        }
+        WM_KEYDOWN if wp.0 == 27 => { unsafe { let _ = PostMessageW(Some(hwnd),WM_CLOSE,WPARAM(0),LPARAM(0)); } }
+        WM_COMMAND if wp.0 & 0xffff == 3 => { unsafe { let _ = PostMessageW(Some(hwnd),WM_CLOSE,WPARAM(0),LPARAM(0)); } }
         WM_APP => start_preview(hwnd, false),
         WM_COMMAND if wp.0 & 0xffff == 1 => start_preview(hwnd, true),
         WM_COMMAND if wp.0 & 0xffff == 2 => super::launch::open("ms-settings:camera"),
@@ -201,8 +266,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         SYNC_PREVIEW => sync_preview(hwnd),
         WM_GETMINMAXINFO => {
             if let Some(info) = unsafe { (lp.0 as *mut MINMAXINFO).as_mut() } {
-                info.ptMinTrackSize.x = (360.0 * scale(hwnd)).round() as i32;
-                info.ptMinTrackSize.y = (240.0 * scale(hwnd)).round() as i32;
+                info.ptMinTrackSize.x = (400.0 * scale(hwnd)).round() as i32;
+                info.ptMinTrackSize.y = (340.0 * scale(hwnd)).round() as i32;
             }
         }
         WM_DPICHANGED => {

@@ -30,12 +30,15 @@ pub enum Mode {
     /// `--restore-taskbar`: shows explorer's taskbar and any windows hidden for
     /// workspaces (uninstall.ps1, or by hand after killing wdock).
     RestoreTaskbar,
+    /// Standalone camera preview, without starting or changing the shell.
+    CameraPreview,
 }
 
 fn parse_mode() -> Result<Mode, String> {
     let mut mode = Mode::Shell;
     for arg in std::env::args().skip(1) {
         mode = match arg.as_str() {
+            "--camera-preview" => Mode::CameraPreview,
             "--dev" => Mode::DevSupervisor,
             "--guard" => Mode::Guard,
             "--shell" => Mode::Shell,
@@ -59,6 +62,7 @@ fn main() -> ExitCode {
     let log_name = match mode {
         Mode::DevSupervisor => "wdock-dev.log",
         Mode::Guard => "wdock-guard.log",
+        Mode::CameraPreview => "wdock-camera.log",
         Mode::Shell | Mode::DevChild | Mode::RestoreTaskbar => "wdock.log",
     };
     if let Err(err) = logging::init(&paths::log_dir().join(log_name)) {
@@ -69,6 +73,7 @@ fn main() -> ExitCode {
     let result: Result<(), Box<dyn std::error::Error>> = match mode {
         Mode::DevSupervisor => dev::supervise().map_err(Into::into),
         Mode::Guard => guard::supervise().map_err(Into::into),
+        Mode::CameraPreview => platform::camera::run().map_err(Into::into),
         Mode::RestoreTaskbar => {
             model::windows::restore_orphans();
             explorer::restore_taskbar();
