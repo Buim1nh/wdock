@@ -81,6 +81,8 @@ const TIMER_APPBAR: usize = 5;
 const TIMER_FULLSCREEN_CHECK: usize = 6;
 /// Explorer applies a reservation asynchronously; check it this long after.
 const APPBAR_CHECK_MS: u32 = 1500;
+/// Extra clearance for DWM's visible title-bar frame below the top bar.
+const TOPBAR_CLEARANCE_PX: i32 = 4;
 /// Some apps (Steam) ignore a TaskbarCreated that arrives soon after another
 /// one, e.g. ours at start right after explorer's or a previous wdock's.
 /// One more broadcast a little later catches them; duplicate adds are refused.
@@ -184,13 +186,9 @@ struct Shell {
     gfx: Option<Rc<Gfx>>,
     /// Every bar window with the monitor it sits on.
     bars: Vec<(HWND, HMONITOR)>,
-    /// Top bars and their interactive screen strips.
-    topbars: Vec<(HWND, HMONITOR, RECT)>,
     pending_device_lost: bool,
     /// The monitor whose bars are hidden under a full-screen app (game mode).
     fullscreen: Option<HMONITOR>,
-    /// Top bars temporarily hidden because the active app's visible frame covers them.
-    covered_topbars: Vec<HWND>,
 }
 
 thread_local! {
@@ -246,8 +244,7 @@ impl Shell {
                         self.bars.push((hwnd, monitor.handle));
                         // Explorer keeps maximized windows below the top bar.
                         let height = (self.config.topbar.height * monitor.scale).round() as i32;
-                        let reserved = RECT { bottom: m.top + height, ..m };
-                        self.topbars.push((hwnd, monitor.handle, reserved));
+                        let reserved = RECT { bottom: m.top + height + TOPBAR_CLEARANCE_PX, ..m };
                         appbar::register(hwnd, Edge::Top, reserved);
                     }
                     Err(err) => log::error!("failed to create top bar: {err}"),
@@ -285,13 +282,12 @@ impl Shell {
     fn update_fullscreen(&mut self) {
         let foreground = unsafe { GetForegroundWindow() };
         let monitor = wininfo::is_fullscreen_app(foreground).then(|| wininfo::monitor(foreground));
-        let covered_topbars = self.covered_topbars(foreground);
         // Follow the foreground app's size changes, except in game mode: there
         // the location hook would wake us for every move inside the game, and
         // leaving full screen is announced by the shell hook and the AppBar
         // notification instead.
         winevents::watch_process(if monitor.is_some() { 0 } else { wininfo::process_id(foreground) });
-        if monitor == self.fullscreen && covered_topbars == self.covered_topbars {
+        if monitor == self.fullscreen {
             if monitor.is_none() { unsafe { let _ = KillTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK); } }
             return;
         }
@@ -300,38 +296,21 @@ impl Shell {
             None => log::info!("full-screen app gone: showing bars"),
         }
         for &(hwnd, on) in &self.bars {
-            let was_suspended = Some(on) == self.fullscreen || self.covered_topbars.contains(&hwnd);
-            let suspended = Some(on) == monitor || covered_topbars.contains(&hwnd);
-            if suspended != was_suspended {
+            let suspended = Some(on) == monitor;
+            if suspended != (Some(on) == self.fullscreen) {
                 bar::suspend(hwnd, suspended);
             }
         }
-        self.covered_topbars = covered_topbars;
-        let fullscreen_changed = monitor != self.fullscreen;
         self.fullscreen = monitor;
-        if fullscreen_changed {
-            unsafe {
-                if monitor.is_some() { SetTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK, 1000, None); }
-                else { let _ = KillTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK); }
-            }
-            popup::set_game_mode(monitor.is_some());
-            if monitor.is_none() {
-                // Explorer gives the strip back once the full-screen app is gone.
-                check_appbars_later();
-            }
+        unsafe {
+            if monitor.is_some() { SetTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK, 1000, None); }
+            else { let _ = KillTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK); }
         }
-    }
-
-    fn covered_topbars(&self, foreground: HWND) -> Vec<HWND> {
-        if !wininfo::is_app_window(foreground) {
-            return Vec::new();
+        popup::set_game_mode(monitor.is_some());
+        if monitor.is_none() {
+            // Explorer gives the strip back once the full-screen app is gone.
+            check_appbars_later();
         }
-        let frame = wininfo::visible_rect(foreground);
-        self.topbars.iter().filter_map(|&(hwnd, _, strip)| {
-            let overlaps = frame.left < strip.right && frame.right > strip.left
-                && frame.top < strip.bottom && frame.bottom > strip.top;
-            overlaps.then_some(hwnd)
-        }).collect()
     }
 
     fn create_topbar(&self, gfx: &Rc<Gfx>, theme: &Rc<Theme>, monitor: &Monitor) -> Result<HWND> {
@@ -349,8 +328,6 @@ impl Shell {
     }
 
     fn destroy_bars(&mut self) {
-        self.topbars.clear();
-        self.covered_topbars.clear();
         for (hwnd, _) in self.bars.drain(..) {
             appbar::unregister(hwnd);
             let _ = unsafe { DestroyWindow(hwnd) };
@@ -461,7 +438,7 @@ pub fn run(mode: Mode) -> Result<()> {
 
     SHELL.with_borrow_mut(|shell| {
         shell
-            .insert(Shell { config, model, gfx: None, bars: Vec::new(), topbars: Vec::new(), pending_device_lost: false, fullscreen: None, covered_topbars: Vec::new() })
+            .insert(Shell { config, model, gfx: None, bars: Vec::new(), pending_device_lost: false, fullscreen: None })
             .rebuild();
     });
     // Register appbars while Explorer's real Shell_TrayWnd is still the
