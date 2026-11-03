@@ -12,6 +12,10 @@ wdock is a macOS-style top bar, dock and Dynamic Island for Windows 11, written 
 
 *The demo shows the dock's magnification, the launcher, the tray icons, the calendar and quick settings. Click it for the 1080p MP4.*
 
+[![Bookmarks and clipboard text tour](docs/media/bookmarks-clipboard.gif)](docs/media/bookmarks-clipboard.mp4)
+
+*Bookmarks, file groups, search and memory-only clipboard text in wdock 0.6.0. Recorded from the running app with sample data; click for the 1080p video.*
+
 ## Contents
 
 - [Screenshots](#screenshots)
@@ -37,8 +41,10 @@ All screenshots are 1920×1080.
 | Launcher (Win+Alt+Space) | |
 | ![Calendar](docs/media/calendar.png) | ![Quick settings](docs/media/quick-settings.png) |
 | Calendar | Quick settings with the Wi-Fi and sound-output lists open |
-| ![Dynamic Island, expanded](docs/media/island.png) | |
-| Dynamic Island, expanded | |
+| ![Dynamic Island, expanded Files tab](docs/media/island.png) | |
+| Dynamic Island, expanded Files tab | |
+| ![Bookmarks with pinned files and groups](docs/media/bookmarks.png) | ![Clipboard text history with a pinned entry](docs/media/clipboard.png) |
+| Bookmarks: references, groups, search and pinning | Clipboard text: copy, pin, pause and clear |
 
 ## Features
 

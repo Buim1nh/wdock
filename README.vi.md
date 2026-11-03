@@ -12,6 +12,10 @@ wdock là bộ top bar, dock và Dynamic Island kiểu macOS cho Windows 11, vi�
 
 *Video demo gồm dock phóng to, launcher, icon khay, lịch và Quick Settings. Bấm vào để xem bản MP4 1080p.*
 
+[![Demo Bookmark và clipboard text](docs/media/bookmarks-clipboard.gif)](docs/media/bookmarks-clipboard.mp4)
+
+*Bookmark, nhóm file, tìm kiếm và clipboard text chỉ lưu trong RAM của wdock 0.6.0. Quay trực tiếp từ ứng dụng với dữ liệu mẫu; bấm để xem video 1080p.*
+
 ## Mục lục
 
 - [Ảnh chụp màn hình](#ảnh-chụp-màn-hình)
@@ -37,8 +41,10 @@ Tất cả ảnh có độ phân giải 1920×1080.
 | Launcher (Win+Alt+Space) | |
 | ![Lịch](docs/media/calendar.png) | ![Quick Settings](docs/media/quick-settings.png) |
 | Lịch | Quick Settings đang mở danh sách Wi-Fi và thiết bị âm thanh |
-| ![Dynamic Island mở rộng](docs/media/island.png) | |
-| Dynamic Island mở rộng | |
+| ![Dynamic Island mở rộng, tab Files](docs/media/island.png) | |
+| Dynamic Island mở rộng, tab Files | |
+| ![Bookmark với file ghim và nhóm](docs/media/bookmarks.png) | ![Lịch sử clipboard text với mục ghim](docs/media/clipboard.png) |
+| Bookmark: tham chiếu, nhóm, tìm kiếm và ghim | Clipboard text: copy, ghim, tạm dừng và xóa |
 
 ## Tính năng
 
