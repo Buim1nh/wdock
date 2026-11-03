@@ -3,7 +3,7 @@
 # Needs no admin.
 #
 # What it does:
-#   1. builds the release binary (unless -NoBuild),
+#   1. uses the adjacent portable binary, or builds the source release (unless -NoBuild),
 #   2. copies it to %LOCALAPPDATA%\Programs\wdock\wdock.exe,
 #   3. registers a per-user scheduled task "wdock" that runs "<that exe>" --guard
 #      at sign-in, and starts it now unless -NoStart.
@@ -24,13 +24,17 @@ param([switch]$NoBuild, [switch]$NoStart, [switch]$WithUsage, [string]$UsageRepo
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
-$built = Join-Path $root 'target\release\wdock.exe'
+$portable = (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'wdock.exe') -PathType Leaf) -and
+    -not (Test-Path -LiteralPath (Join-Path $root 'Cargo.toml') -PathType Leaf) -and
+    -not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Cargo.toml') -PathType Leaf)
+if ($portable) { $root = $PSScriptRoot }
+$built = if ($portable) { Join-Path $root 'wdock.exe' } else { Join-Path $root 'target\release\wdock.exe' }
 $dir = Join-Path $env:LOCALAPPDATA 'Programs\wdock'
 $exe = Join-Path $dir 'wdock.exe'
 $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $winlogon = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
 
-if (-not $NoBuild) {
+if (-not $NoBuild -and -not $portable) {
     $env:Path += ";$env:USERPROFILE\.cargo\bin"
     Push-Location $root
     try { cargo build --release; if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' } } finally { Pop-Location }

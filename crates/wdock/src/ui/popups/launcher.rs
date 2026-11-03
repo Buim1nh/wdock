@@ -16,7 +16,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VK_DOWN, VK_NEXT, VK_PRIOR, VK
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 use crate::model::config::Backdrop;
-use crate::model::search::{Candidate, Target};
+use crate::model::search::{Candidate, Target, Tool};
 use crate::platform::launch;
 use crate::platform::session::{self, SessionAction};
 use crate::services::apps_index;
@@ -102,6 +102,15 @@ impl LauncherView {
         match &candidate.target {
             Target::App(target) | Target::Setting(target) => launch::open(target),
             Target::Session(action) => session::perform(*action),
+            Target::Tool(tool) => {
+                let mid = (self.monitor.left + self.monitor.right) / 2;
+                let top = self.monitor.top + (36.0 * self.scale).round() as i32;
+                let anchor = RECT { left: mid, right: mid, top, bottom: top };
+                match tool {
+                    Tool::Bookmarks => crate::ui::popup::toggle_bookmarks(anchor, self.scale),
+                    Tool::Clipboard => crate::ui::popup::toggle_clipboard(anchor, self.scale),
+                }
+            }
         }
     }
 
@@ -111,6 +120,8 @@ impl LauncherView {
             Target::Setting(_) => "Settings",
             Target::Session(action) if self.armed == Some(action) => "Press Enter again to confirm",
             Target::Session(_) => "System",
+            Target::Tool(Tool::Bookmarks) => "Saved files and folders",
+            Target::Tool(Tool::Clipboard) => "Text history · kept in memory",
         }
     }
 
@@ -226,6 +237,7 @@ impl View for LauncherView {
                 }
                 Target::Setting(_) => text::draw(cx, glyphs::SETTINGS, &icon, icon_rect, fg),
                 Target::Session(action) => text::draw(cx, session_glyph(*action), &icon, icon_rect, fg),
+                Target::Tool(tool) => text::draw(cx, match tool { Tool::Bookmarks => "\u{E8A4}", Tool::Clipboard => "\u{E77F}" }, &icon, icon_rect, fg),
             }
 
             let text_left = icon_rect.right + 12.0 * s;

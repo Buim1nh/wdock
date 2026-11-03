@@ -158,6 +158,8 @@ pub struct IslandConfig {
     pub animate_equalizer: bool,
     pub lyrics_background_motion: bool,
     pub file_shelf: bool,
+    /// Opt-in, memory-only text clipboard history.
+    pub clipboard_history: bool,
     pub widget_order: Vec<String>,
 }
 
@@ -238,7 +240,7 @@ impl Default for IslandConfig {
         Self {
             enabled: true, style: IslandStyle::Island, notch_width: 200.0,
             pomodoro_work: 25, pomodoro_break: 5, notices: true, animate_equalizer: true,
-            file_shelf: true, lyrics_background_motion: true,
+            file_shelf: true, clipboard_history: false, lyrics_background_motion: true,
             widget_order: vec!["media".into(), "files".into()],
         }
     }

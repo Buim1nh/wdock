@@ -16,7 +16,11 @@ pub enum Target {
     /// `ms-settings:` page.
     Setting(String),
     Session(SessionAction),
+    Tool(Tool),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool { Bookmarks, Clipboard }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
@@ -30,6 +34,7 @@ impl Candidate {
         match &self.target {
             Target::App(t) | Target::Setting(t) => t.to_lowercase(),
             Target::Session(action) => format!("session:{action:?}"),
+            Target::Tool(tool) => format!("tool:{tool:?}"),
         }
     }
 }
@@ -79,6 +84,10 @@ pub fn builtins() -> Vec<Candidate> {
         .iter()
         .map(|(name, uri)| Candidate { name: (*name).into(), target: Target::Setting((*uri).into()) })
         .chain(COMMANDS.iter().map(|(name, action)| Candidate { name: (*name).into(), target: Target::Session(*action) }))
+        .chain([
+            Candidate { name: "Bookmarks".into(), target: Target::Tool(Tool::Bookmarks) },
+            Candidate { name: "Clipboard history".into(), target: Target::Tool(Tool::Clipboard) },
+        ])
         .collect()
 }
 
@@ -141,6 +150,7 @@ pub fn search<'a>(query: &str, items: &'a [Candidate], usage: &HashMap<String, u
             let adjusted = match c.target {
                 Target::App(_) => base,
                 Target::Setting(_) => base - 60,
+                Target::Tool(_) => base,
                 // Never surface "Shut down" for a stray subsequence match.
                 Target::Session(action) if action.needs_confirmation() && base < 600 => return None,
                 Target::Session(_) => base - 40,
@@ -192,6 +202,15 @@ mod tests {
         assert!(search("sdn", &items, &usage, 10).iter().all(|c| c.name != "Shut down"));
         assert_eq!(search("shut", &items, &usage, 10)[0].name, "Shut down");
         assert!(search("lk", &items, &usage, 10).iter().any(|c| c.name == "Lock"), "harmless commands match loosely");
+    }
+
+    #[test]
+    fn local_tools_are_searchable_without_an_app_index() {
+        let items = builtins();
+        let usage = HashMap::new();
+        assert_eq!(search("clipboard", &items, &usage, 1)[0].target, Target::Tool(Tool::Clipboard));
+        assert_eq!(search("bookmark", &items, &usage, 1)[0].target, Target::Tool(Tool::Bookmarks));
+        assert!(search("", &items, &usage, 8).is_empty());
     }
 
     #[test]

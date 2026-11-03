@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DeregisterShellHookWindow, DestroyWindow, DispatchMessageW,
     GetForegroundWindow, GetMessageW, KillTimer, MSG, PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE,
     PostMessageW, PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SetTimer,
-    TranslateMessage, WM_APP, WM_DESTROY, WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
+    TranslateMessage, WM_APP, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{Result, w};
@@ -41,6 +41,7 @@ use crate::model::config::{self, AutoHide, Config, MonitorScope};
 use crate::model::pins;
 use crate::model::windows::{self as window_model, WindowModel};
 use crate::platform::appbar::{self, Edge};
+use crate::platform::clipboard;
 use crate::platform::monitors::{self, Monitor};
 use crate::platform::tray_host::{self, TrayEvent, TrayHost, WM_APP_TRAY};
 use crate::platform::winevents::{self, WM_APP_WINEVENTS};
@@ -194,6 +195,7 @@ impl Shell {
         self.destroy_bars();
         crate::ui::text::set_ui_font(&self.config.appearance.font);
         island::configure(&self.config.island);
+        self.configure_clipboard();
         if std::mem::take(&mut self.pending_device_lost) {
             self.gfx = None;
         }
@@ -273,6 +275,7 @@ impl Shell {
         // leaving full screen is announced by the shell hook and the AppBar
         // notification instead.
         winevents::watch_process(if monitor.is_some() { 0 } else { wininfo::process_id(foreground) });
+        clipboard::suspend(main_hwnd(), monitor.is_some());
         if monitor == self.fullscreen {
             return;
         }
@@ -320,6 +323,16 @@ impl Shell {
             bar::notify_model_changed(hwnd);
         }
         popup::notify();
+    }
+
+    fn configure_clipboard(&self) {
+        if clipboard::configure(
+            main_hwnd(),
+            self.config.island.clipboard_history,
+            self.fullscreen.is_some(),
+        ) {
+            popup::clipboard_changed();
+        }
     }
 
     /// Applies the saved config live. The settings panel is rebuilt with the
@@ -430,6 +443,7 @@ pub fn run(mode: Mode) -> Result<()> {
     }
 
     popup::set_context(None);
+    clipboard::stop(hwnd);
     services::stop();
     media::stop();
     privacy::stop();
@@ -526,6 +540,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 
     match msg {
+        WM_CLIPBOARDUPDATE => {
+            clipboard::request_capture(hwnd);
+            LRESULT(0)
+        }
+        clipboard::WM_APP_CLIPBOARD => {
+            if clipboard::receive(hwnd) {
+                popup::clipboard_changed();
+            }
+            LRESULT(0)
+        }
         crate::platform::tray_preferences::WM_TRAY_PREFERENCES => {
             let prefs = crate::platform::tray_preferences::load();
             tray_host::with_tray(|tray| tray.set_windows_preferences(prefs));
@@ -636,6 +660,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 shell.config.island.widget_order = updated.widget_order;
                 shell.config.island.style = updated.style;
                 shell.config.island.notch_width = updated.notch_width;
+                shell.config.island.clipboard_history = updated.clipboard_history;
+                shell.configure_clipboard();
                 island::refresh_appearance();
             });
             LRESULT(0)
@@ -671,6 +697,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             LRESULT(0)
         }
         WM_DESTROY => {
+            clipboard::stop(hwnd);
             unregister_hotkeys(hwnd);
             let _ = unsafe { DeregisterShellHookWindow(hwnd) };
             unsafe { PostQuitMessage(0) };

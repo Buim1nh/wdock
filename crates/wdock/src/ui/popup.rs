@@ -50,13 +50,15 @@ thread_local! {
     static PREVIEW_OF: RefCell<Vec<HWND>> = const { RefCell::new(Vec::new()) };
     static GAME_MODE: Cell<bool> = const { Cell::new(false) };
     static SETTINGS: Cell<Option<HWND>> = const { Cell::new(None) };
+    static BOOKMARKS: Cell<Option<HWND>> = const { Cell::new(None) };
+    static CLIPBOARD: Cell<Option<HWND>> = const { Cell::new(None) };
     /// Where the settings panel is anchored, so a reload can reopen it.
     static SETTINGS_AT: Cell<Option<(RECT, f32)>> = const { Cell::new(None) };
 }
 
 /// Slots closed whenever another panel opens.
-fn panels() -> [&'static std::thread::LocalKey<Cell<Option<HWND>>>; 8] {
-    [&OVERFLOW, &QUICK, &CALENDAR, &LAUNCHER, &OVERVIEW, &MENU, &PREVIEW, &SETTINGS]
+fn panels() -> [&'static std::thread::LocalKey<Cell<Option<HWND>>>; 10] {
+    [&OVERFLOW, &QUICK, &CALENDAR, &LAUNCHER, &OVERVIEW, &MENU, &PREVIEW, &SETTINGS, &BOOKMARKS, &CLIPBOARD]
 }
 
 fn context() -> Option<Rc<PopupContext>> {
@@ -84,6 +86,8 @@ pub fn set_context(ctx: Option<PopupContext>) {
     destroy(&MENU);
     destroy(&PREVIEW);
     destroy(&SETTINGS);
+    destroy(&BOOKMARKS);
+    destroy(&CLIPBOARD);
     hide_balloon();
     CTX.set(ctx.map(Rc::new));
 }
@@ -210,6 +214,23 @@ pub fn toggle_settings(anchor: RECT, scale: f32) {
     toggle_panel(&SETTINGS, scale, || Box::new(SettingsView::new(anchor, scale)));
 }
 
+pub fn toggle_bookmarks(anchor: RECT, scale: f32) {
+    if GAME_MODE.get() { return; }
+    crate::model::island_files::init();
+    toggle_panel(&BOOKMARKS, scale, || Box::new(crate::ui::popups::bookmarks::BookmarksView::new(anchor, scale)));
+}
+
+pub fn toggle_clipboard(anchor: RECT, scale: f32) {
+    if GAME_MODE.get() { return; }
+    toggle_panel(&CLIPBOARD, scale, || Box::new(crate::ui::popups::clipboard::ClipboardView::new(anchor, scale)));
+}
+
+pub fn clipboard_changed() {
+    if let Some(hwnd) = CLIPBOARD.get().filter(|h| alive(*h)) {
+        bar::notify_model_changed(hwnd);
+    }
+}
+
 /// Where the settings panel is open, if it is; a reload reopens it there.
 pub fn settings_reopen() -> Option<(RECT, f32)> {
     SETTINGS.get().is_some_and(alive).then(|| SETTINGS_AT.get()).flatten()
@@ -244,6 +265,8 @@ pub fn set_game_mode(on: bool) {
     GAME_MODE.set(on);
     if on {
         hide_balloon();
+        destroy(&BOOKMARKS);
+        destroy(&CLIPBOARD);
     }
 }
 

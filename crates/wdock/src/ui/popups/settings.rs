@@ -46,12 +46,13 @@ enum Setting {
     Equalizer,
     LyricsMotion,
     IslandFiles,
+    ClipboardHistory,
     IslandOrder,
     SignIn,
     OpenFile,
 }
 
-const ROWS: [(Setting, &str); 19] = [
+const ROWS: [(Setting, &str); 20] = [
     (Setting::Theme, "Theme"),
     (Setting::Backdrop, "Backdrop"),
     (Setting::Font, "Font"),
@@ -68,6 +69,7 @@ const ROWS: [(Setting, &str); 19] = [
     (Setting::Equalizer, "Animated equalizer"),
     (Setting::LyricsMotion, "Lyrics background motion"),
     (Setting::IslandFiles, "Island file shelf"),
+    (Setting::ClipboardHistory, "Clipboard history (RAM)"),
     (Setting::IslandOrder, "Order (M/F)"),
     (Setting::SignIn, "Start at sign-in"),
     (Setting::OpenFile, "Open config file"),
@@ -144,6 +146,7 @@ impl Setting {
             Self::Equalizer => on_off(config.island.animate_equalizer),
             Self::LyricsMotion => on_off(config.island.lyrics_background_motion),
             Self::IslandFiles => on_off(config.island.file_shelf),
+            Self::ClipboardHistory => on_off(config.island.clipboard_history),
             Self::IslandOrder => return widget_order(&config.island.widget_order)
                 .iter().map(|s| if *s == "media" { "M" } else { "F" })
                 .collect::<Vec<_>>().join(" · "),
@@ -209,6 +212,7 @@ impl Setting {
             Self::Equalizer => key("island", "animate_equalizer", &(!config.island.animate_equalizer).to_string()),
             Self::LyricsMotion => key("island", "lyrics_background_motion", &(!config.island.lyrics_background_motion).to_string()),
             Self::IslandFiles => key("island", "file_shelf", &(!config.island.file_shelf).to_string()),
+            Self::ClipboardHistory => key("island", "clipboard_history", &(!config.island.clipboard_history).to_string()),
             Self::IslandOrder => {
                 let current = widget_order(&config.island.widget_order);
                 let i = ORDERS.iter().position(|o| *o == current).unwrap_or(0);

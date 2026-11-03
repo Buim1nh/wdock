@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod calendar;
+pub mod clipboard;
 pub mod config;
 pub mod config_edit;
 pub mod island_files;
