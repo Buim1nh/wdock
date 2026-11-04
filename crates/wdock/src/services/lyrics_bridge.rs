@@ -18,7 +18,13 @@ pub fn start() {
                 Err(err) => { log::warn!("lyrics companion unavailable: {err}"); return; }
             };
             let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().is_ok() };
-            for stream in listener.incoming().flatten() { reply(stream); }
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => reply(stream),
+                    // A persistent accept error (e.g. socket exhaustion) would otherwise spin a core.
+                    Err(err) => { log::debug!("lyrics companion accept failed: {err}"); std::thread::sleep(Duration::from_millis(250)); }
+                }
+            }
             if initialized { unsafe { CoUninitialize() }; }
         });
     });
@@ -44,13 +50,18 @@ fn spotify_origin_allowed(header: &str) -> bool {
 fn reply(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    // The listener is single-threaded: bound the whole request, not each read, so a
+    // client that trickles bytes cannot stall every other caller.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
     let mut data = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     let (header_end, content_length) = loop {
+        if std::time::Instant::now() > deadline { return; }
         let Ok(n) = stream.read(&mut chunk) else { return; };
         if n == 0 || data.len() + n > 262144 { return; }
+        let scan = data.len().saturating_sub(3);
         data.extend_from_slice(&chunk[..n]);
-        if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+        if let Some(pos) = data[scan..].windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + scan) {
             let Ok(header) = std::str::from_utf8(&data[..pos]) else { return; };
             let length = header.lines().find_map(|line| {
                 let (name, value) = line.split_once(':')?;
@@ -61,6 +72,7 @@ fn reply(mut stream: TcpStream) {
         }
     };
     while data.len() < header_end + content_length {
+        if std::time::Instant::now() > deadline { return; }
         let Ok(n) = stream.read(&mut chunk) else { return; };
         if n == 0 || data.len() + n > 262144 { return; }
         data.extend_from_slice(&chunk[..n]);
@@ -241,6 +253,24 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(response.contains("Content-Type: application/json"));
         assert!(response.ends_with("\r\n\r\nnull"));
+    }
+
+    #[test]
+    fn trickling_client_is_dropped_at_the_request_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let started = std::time::Instant::now();
+            super::reply(stream);
+            started.elapsed()
+        });
+        let mut client = std::net::TcpStream::connect(address).unwrap();
+        for byte in b"GET /now HTTP/1.1\r\nHost: 127.0.0.1:43179\r\n" {
+            if client.write_all(&[*byte]).is_err() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+        assert!(worker.join().unwrap() < std::time::Duration::from_millis(3500));
     }
 
     #[test]
