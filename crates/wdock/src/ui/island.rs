@@ -2024,8 +2024,7 @@ mod tests {
 
     #[test]
     fn widget_order_respects_toggles_and_ignores_duplicates() {
-        let mut config = IslandConfig::default();
-        config.widget_order = vec!["notes".into(), "files".into(), "notes".into(), "invalid".into()];
+        let mut config = IslandConfig { widget_order: vec!["notes".into(), "files".into(), "notes".into(), "invalid".into()], ..Default::default() };
         assert_eq!(configured_tabs(&config), vec![Tab::Files, Tab::Media, Tab::Lyrics]);
         config.file_shelf = false;
         assert_eq!(configured_tabs(&config), vec![Tab::Media, Tab::Lyrics]);

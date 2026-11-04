@@ -776,20 +776,6 @@ impl Dock {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn hover_motion_converges_and_stops() {
-        let mut x = 0.0;
-        for _ in 0..100 {
-            let previous = x;
-            super::smooth_pointer(&mut x, 300.0);
-            assert!(x >= previous && x <= 300.0);
-            if x == 300.0 { break; }
-        }
-        assert_eq!(x, 300.0);
-    }
-}
 
 impl View for Dock {
     fn attach(&mut self, hwnd: HWND) {
@@ -1036,5 +1022,20 @@ impl View for Dock {
             }
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hover_motion_converges_and_stops() {
+        let mut x = 0.0;
+        for _ in 0..100 {
+            let previous = x;
+            super::smooth_pointer(&mut x, 300.0);
+            assert!(x >= previous && x <= 300.0);
+            if x == 300.0 { break; }
+        }
+        assert_eq!(x, 300.0);
     }
 }

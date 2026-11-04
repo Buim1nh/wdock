@@ -434,36 +434,6 @@ fn scaled_art_size(width: u32, height: u32) -> Option<(u32, u32)> {
     Some((((width as f64 * scale).round() as u32).max(1), ((height as f64 * scale).round() as u32).max(1)))
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn process_names_are_detected_without_hardcoded_apps() {
-        assert_eq!(super::process_name("Chrome"), Some("Chrome.exe".into()));
-        assert_eq!(super::process_name("Spotify.exe"), Some("Spotify.exe".into()));
-        assert_eq!(super::process_name("com.example.App!player"), None);
-        assert_eq!(super::process_name("C:\\other.exe"), None);
-    }
-
-    #[test]
-    #[ignore = "requires a running Spotify desktop process"]
-    fn resolves_live_spotify_executable() {
-        let path = super::media_executable("Spotify.exe").expect("Spotify desktop process");
-        assert!(path.to_ascii_lowercase().ends_with("\\spotify.exe"));
-        let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
-        let wic: windows::Win32::Graphics::Imaging::IWICImagingFactory = unsafe {
-            windows::Win32::System::Com::CoCreateInstance(&windows::Win32::Graphics::Imaging::CLSID_WICImagingFactory, None, windows::Win32::System::Com::CLSCTX_INPROC_SERVER)
-        }.unwrap();
-        assert!(super::app_icon(&wic, "Spotify.exe").is_ok());
-    }
-
-    #[test]
-    fn artwork_scaling_preserves_landscape_and_portrait_proportions() {
-        assert_eq!(super::scaled_art_size(1600, 900), Some((112, 63)));
-        assert_eq!(super::scaled_art_size(900, 1600), Some((63, 112)));
-        assert_eq!(super::scaled_art_size(100, 100), Some((112, 112)));
-        assert_eq!(super::scaled_art_size(0, 100), None);
-    }
-}
 
 fn read_art(thumbnail: &IRandomAccessStreamReference, wic: &IWICImagingFactory) -> Result<Art> {
     let stream = thumbnail.OpenReadAsync()?.join()?;
@@ -497,5 +467,36 @@ fn read_art(thumbnail: &IRandomAccessStreamReference, wic: &IWICImagingFactory) 
         let mut pixels = vec![0u8; (width * height * 4) as usize];
         converter.CopyPixels(std::ptr::null(), width * 4, &mut pixels)?;
         Ok(Art { width, height, pixels })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn process_names_are_detected_without_hardcoded_apps() {
+        assert_eq!(super::process_name("Chrome"), Some("Chrome.exe".into()));
+        assert_eq!(super::process_name("Spotify.exe"), Some("Spotify.exe".into()));
+        assert_eq!(super::process_name("com.example.App!player"), None);
+        assert_eq!(super::process_name("C:\\other.exe"), None);
+    }
+
+    #[test]
+    #[ignore = "requires a running Spotify desktop process"]
+    fn resolves_live_spotify_executable() {
+        let path = super::media_executable("Spotify.exe").expect("Spotify desktop process");
+        assert!(path.to_ascii_lowercase().ends_with("\\spotify.exe"));
+        let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
+        let wic: windows::Win32::Graphics::Imaging::IWICImagingFactory = unsafe {
+            windows::Win32::System::Com::CoCreateInstance(&windows::Win32::Graphics::Imaging::CLSID_WICImagingFactory, None, windows::Win32::System::Com::CLSCTX_INPROC_SERVER)
+        }.unwrap();
+        assert!(super::app_icon(&wic, "Spotify.exe").is_ok());
+    }
+
+    #[test]
+    fn artwork_scaling_preserves_landscape_and_portrait_proportions() {
+        assert_eq!(super::scaled_art_size(1600, 900), Some((112, 63)));
+        assert_eq!(super::scaled_art_size(900, 1600), Some((63, 112)));
+        assert_eq!(super::scaled_art_size(100, 100), Some((112, 112)));
+        assert_eq!(super::scaled_art_size(0, 100), None);
     }
 }

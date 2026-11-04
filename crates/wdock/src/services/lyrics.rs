@@ -59,7 +59,7 @@ pub fn accept_live(title: String, artist: String, lyrics: LiveLyrics) -> bool {
     if !matches_spotify_track(&media.source_app_id, &media.title, &media.artist, &title, &artist)
         || !matches!(lyrics.source.as_str(), "Spicy Lyrics" | "Lyrics Plus")
         || lyrics.colors.len() > 96 || lyrics.lines.is_empty() || lyrics.lines.len() > 12 || lyrics.active >= lyrics.lines.len()
-        || lyrics.progress.is_some_and(|progress| !progress.is_finite() || progress < 0.0 || progress > 256.0)
+        || lyrics.progress.is_some_and(|progress| !progress.is_finite() || !(0.0..=256.0).contains(&progress))
         || lyrics.lines.iter().any(|line| line.is_empty() || line.len() > 1024)
     { return false; }
     let Ok(mut slot) = LIVE.lock() else { return false; };
