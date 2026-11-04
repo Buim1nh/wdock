@@ -403,3 +403,36 @@ pub fn preview_open() -> bool {
 pub fn overview_open() -> bool {
     OVERVIEW.get().is_some_and(alive)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::clamp;
+    use windows::Win32::Foundation::RECT;
+
+    const PRIMARY: RECT = RECT { left: 0, top: 0, right: 1920, bottom: 1080 };
+    // A secondary monitor to the left of and above the primary one.
+    const LEFT: RECT = RECT { left: -1440, top: -200, right: 0, bottom: 700 };
+
+    #[test]
+    fn popup_inside_the_monitor_is_unchanged() {
+        assert_eq!(clamp(100, 40, 300, 200, PRIMARY), RECT { left: 100, top: 40, right: 400, bottom: 240 });
+    }
+
+    #[test]
+    fn popup_is_pushed_back_from_each_edge() {
+        assert_eq!(clamp(1800, 1000, 300, 200, PRIMARY), RECT { left: 1620, top: 880, right: 1920, bottom: 1080 });
+        assert_eq!(clamp(-50, -10, 300, 200, PRIMARY), RECT { left: 0, top: 0, right: 300, bottom: 200 });
+    }
+
+    #[test]
+    fn negative_monitor_coordinates_are_respected() {
+        assert_eq!(clamp(-100, -300, 300, 200, LEFT), RECT { left: -300, top: -200, right: 0, bottom: 0 });
+        assert_eq!(clamp(-2000, 650, 300, 200, LEFT), RECT { left: -1440, top: 500, right: -1140, bottom: 700 });
+    }
+
+    #[test]
+    fn oversized_popup_keeps_its_top_left_corner_on_screen() {
+        let r = clamp(500, 500, 2500, 1500, PRIMARY);
+        assert_eq!((r.left, r.top, r.right - r.left, r.bottom - r.top), (0, 0, 2500, 1500));
+    }
+}
