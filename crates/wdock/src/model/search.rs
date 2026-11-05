@@ -76,6 +76,7 @@ const COMMANDS: &[(&str, SessionAction)] = &[
     ("Sign out", SessionAction::SignOut),
     ("Restart", SessionAction::Restart),
     ("Shut down", SessionAction::ShutDown),
+    ("Reload wdock", SessionAction::ReloadWdock),
 ];
 
 /// Settings pages and session commands, always searchable.

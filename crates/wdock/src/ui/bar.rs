@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WA_INACTIVE, WM_ACTIVATE, WM_CLOSE, WM_DESTROY, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN,
     WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_MOUSEWHEEL, WM_MOUSEHWHEEL, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, SendMessageW, SWP_NOZORDER, WM_RBUTTONUP, CreateWindowExW, DefWindowProcW, GWLP_USERDATA,
     GetClientRect, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
-    MA_NOACTIVATE, PostMessageW, RegisterClassW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+    MA_NOACTIVATE, PostMessageW, RegisterClassW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_DISPLAYCHANGE, WM_DPICHANGED,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCCREATE,
     WM_NCDESTROY, WM_PAINT, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
@@ -107,6 +107,10 @@ pub trait View {
     fn command(&mut self, _id: usize) -> bool {
         false
     }
+    /// One line of state for the log when the user reloads wdock.
+    fn diagnostics(&self) -> Option<String> {
+        None
+    }
     /// Where the window should be, for views whose size depends on content.
     fn frame(&self) -> Option<RECT> {
         None
@@ -137,6 +141,20 @@ pub fn suspend(hwnd: HWND, suspended: bool) {
     unsafe {
         let _ = PostMessageW(Some(hwnd), WM_APP_SUSPEND, WPARAM(suspended as usize), LPARAM(0));
     }
+}
+
+/// Back to the top of the topmost band. `WS_EX_TOPMOST` only keeps a window
+/// above normal ones: every other topmost window that shows or activates later
+/// lands above it, and nothing moves it back.
+pub fn raise(hwnd: HWND) {
+    unsafe {
+        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+/// The view's state line, if it has one (same thread only).
+pub fn diagnostics(hwnd: HWND) -> Option<String> {
+    unsafe { state_mut(hwnd) }.and_then(|state| state.view.diagnostics())
 }
 
 /// Delivers `View::command(id)` synchronously.

@@ -19,6 +19,8 @@ pub enum SessionAction {
     SignOut,
     Restart,
     ShutDown,
+    /// Rebuilds wdock itself; the session goes on.
+    ReloadWdock,
 }
 
 impl SessionAction {
@@ -42,6 +44,10 @@ pub fn perform(action: SessionAction) {
             // Hybrid shutdown keeps Fast Startup working, like the Start menu.
             SessionAction::ShutDown => enable_shutdown_privilege()
                 .and_then(|()| ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF | EWX_HYBRID_SHUTDOWN, reason)),
+            SessionAction::ReloadWdock => {
+                crate::app::reload();
+                Ok(())
+            }
         }
     };
     if let Err(err) = result {
