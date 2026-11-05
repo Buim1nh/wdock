@@ -13,6 +13,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::HMONITOR;
@@ -73,6 +74,10 @@ const WM_APP_FULLSCREEN: u32 = WM_APP + 5;
 const WM_APP_CONFIG: u32 = WM_APP + 24;
 const WM_APP_ISLAND_APPEARANCE: u32 = WM_APP + 25;
 const WM_APP_LYRICS: u32 = WM_APP + 26;
+/// The user asked for a reload; also posted by `wdock --reload`.
+pub const WM_APP_RELOAD: u32 = WM_APP + 28;
+/// Slower than this, a window-event batch is what makes the UI feel laggy.
+const SLOW_EVENTS: Duration = Duration::from_millis(100);
 const TIMER_REBUILD: usize = 1;
 const TIMER_RECLAIM: usize = 3;
 const TIMER_POMODORO: usize = 4;
@@ -124,6 +129,11 @@ fn check_appbars_later() {
 /// Reloads config.toml and rebuilds the bars (called after the settings panel saves).
 pub fn reload_config() {
     post_main(WM_APP_CONFIG);
+}
+
+/// Rebuilds everything wdock put on screen, for when it misbehaves.
+pub fn reload() {
+    post_main(WM_APP_RELOAD);
 }
 
 /// Applies island appearance and tab order without rebuilding the AppBars.
@@ -350,6 +360,17 @@ impl Shell {
             popup::toggle_settings(anchor, scale);
         }
     }
+
+    /// Recreates the bars and the GPU objects from a fresh config. The state
+    /// is logged first: this is the moment something is known to be wrong.
+    fn reload(&mut self, hwnd: HWND) {
+        log::info!("reload requested; full-screen monitor: {:?}", self.fullscreen);
+        for line in self.bars.iter().filter_map(|&(bar, _)| bar::diagnostics(bar)) {
+            log::info!("{line}");
+        }
+        self.pending_device_lost = true;
+        self.reload_config(hwnd);
+    }
 }
 
 fn in_scope(scope: MonitorScope, monitor: &Monitor) -> bool {
@@ -562,7 +583,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             LRESULT(0)
         }
         WM_APP_WINEVENTS => {
+            let started = Instant::now();
             let events = winevents::drain();
+            let count = events.len();
             let moved = !events.is_empty();
             enforce_hybrid();
             with_shell(|shell| {
@@ -575,6 +598,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     shell.notify_bars();
                 }
             });
+            if started.elapsed() > SLOW_EVENTS {
+                log::warn!("{count} window event(s) held the UI thread for {:?}", started.elapsed());
+            }
             LRESULT(0)
         }
         WM_APP_TRAY => {
@@ -652,6 +678,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
         WM_APP_CONFIG => {
             with_shell(|shell| shell.reload_config(hwnd));
+            LRESULT(0)
+        }
+        WM_APP_RELOAD => {
+            with_shell(|shell| shell.reload(hwnd));
+            enforce_hybrid();
+            tray_host::reclaim();
             LRESULT(0)
         }
         WM_APP_ISLAND_APPEARANCE => {

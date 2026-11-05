@@ -10,6 +10,7 @@ mod logging;
 mod model;
 mod paths;
 mod platform;
+mod reload;
 mod services;
 mod ui;
 
@@ -30,6 +31,8 @@ pub enum Mode {
     /// `--restore-taskbar`: shows explorer's taskbar and any windows hidden for
     /// workspaces (uninstall.ps1, or by hand after killing wdock).
     RestoreTaskbar,
+    /// `--reload`: rebuilds the running shell, or restarts it if it is hung.
+    Reload,
     /// Standalone camera preview, without starting or changing the shell.
     CameraPreview,
 }
@@ -43,6 +46,7 @@ fn parse_mode() -> Result<Mode, String> {
             "--guard" => Mode::Guard,
             "--shell" => Mode::Shell,
             "--restore-taskbar" => Mode::RestoreTaskbar,
+            "--reload" => Mode::Reload,
             "--dev-child" => Mode::DevChild,
             other => return Err(format!("unknown argument: {other}")),
         };
@@ -54,7 +58,7 @@ fn main() -> ExitCode {
     let mode = match parse_mode() {
         Ok(mode) => mode,
         Err(err) => {
-            eprintln!("{err}\nusage: wdock [--dev | --guard | --restore-taskbar]");
+            eprintln!("{err}\nusage: wdock [--dev | --guard | --reload | --restore-taskbar]");
             return ExitCode::from(2);
         }
     };
@@ -63,7 +67,7 @@ fn main() -> ExitCode {
         Mode::DevSupervisor => "wdock-dev.log",
         Mode::Guard => "wdock-guard.log",
         Mode::CameraPreview => "wdock-camera.log",
-        Mode::Shell | Mode::DevChild | Mode::RestoreTaskbar => "wdock.log",
+        Mode::Shell | Mode::DevChild | Mode::RestoreTaskbar | Mode::Reload => "wdock.log",
     };
     if let Err(err) = logging::init(&paths::log_dir().join(log_name)) {
         eprintln!("failed to open log file: {err}");
@@ -74,6 +78,7 @@ fn main() -> ExitCode {
         Mode::DevSupervisor => dev::supervise().map_err(Into::into),
         Mode::Guard => guard::supervise().map_err(Into::into),
         Mode::CameraPreview => platform::camera::run().map_err(Into::into),
+        Mode::Reload => reload::request().map_err(Into::into),
         Mode::RestoreTaskbar => {
             model::windows::restore_orphans();
             explorer::restore_taskbar();

@@ -262,6 +262,7 @@ Dữ liệu và log nằm trong `%LOCALAPPDATA%\wdock\`:
 | Sự cố | Cách xử lý |
 |---|---|
 | Top bar đè lên cửa sổ maximize | wdock tự sửa trong vài giây (xem [Cách hoạt động](#cách-hoạt-động)). Lỗi xảy ra khi bộ quản lý AppBar của explorer bị kẹt, ví dụ sau khi wdock bị khởi động lại liên tục nhiều lần. Nếu vẫn còn, khởi động lại explorer trong Task Manager. |
+| wdock bị lag hoặc dock không hiện nữa | Gõ `reload` trong launcher (Win+Alt+Space) hoặc bấm nút đó ở cuối phần cài đặt của wdock. Nếu giao diện không phản hồi, chạy `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --reload`. Trạng thái lúc đó được ghi vào `wdock.log`. |
 | Taskbar của explorer không hiện lại sau khi wdock bị kill | Chạy `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --restore-taskbar`. |
 | Thiếu một icon khay | Khởi động lại app sở hữu icon đó. wdock yêu cầu các app thêm lại icon lúc khởi động và thêm một lần sau 5 giây. |
 | Island không có ảnh bìa khi xem video | Trang web không khai báo ảnh bìa. Island sẽ hiện biểu tượng app, và khi mở rộng thì hiện khung hình trực tiếp của cửa sổ. |
@@ -297,6 +298,7 @@ Các chế độ dòng lệnh:
 | không có hoặc `--shell` | chạy shell |
 | `--guard` | supervisor lúc đăng nhập |
 | `--dev` | supervisor dev |
+| `--reload` | dựng lại shell đang chạy, hoặc khởi động lại nếu nó bị treo, rồi thoát |
 | `--restore-taskbar` | trả lại taskbar của explorer và các cửa sổ đang ẩn, rồi thoát |
 
 Mã nguồn nằm trong `crates/wdock/src`:

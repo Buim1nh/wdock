@@ -3,7 +3,7 @@
 
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Foundation::{CloseHandle, HWND, POINT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
@@ -16,10 +16,10 @@ use windows::Win32::System::Threading::{
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegGetValueW, RRF_RT_REG_DWORD};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GA_ROOT, GA_ROOTOWNER, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
+    FindWindowExW, GA_ROOT, GA_ROOTOWNER, GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
     GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
     IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
-    SwitchToThisWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    SwitchToThisWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WindowFromPoint,
 };
 use windows::core::{BSTR, HSTRING, PCWSTR, PWSTR, w};
 
@@ -224,6 +224,16 @@ pub fn rect(hwnd: HWND) -> windows::Win32::Foundation::RECT {
     let mut rect = Default::default();
     let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut rect) };
     rect
+}
+
+/// The top-level window that takes the mouse at a screen point.
+pub fn window_at(point: POINT) -> HWND {
+    unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) }
+}
+
+/// Whether any window, shown or not, sits above this one in the z-order.
+pub fn has_window_above(hwnd: HWND) -> bool {
+    unsafe { GetWindow(hwnd, GW_HWNDPREV) }.is_ok()
 }
 
 /// Covers its whole monitor without a caption: games and full-screen video.

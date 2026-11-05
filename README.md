@@ -264,6 +264,7 @@ State and logs live in `%LOCALAPPDATA%\wdock\`:
 |---|---|
 | The top bar covers maximized windows | wdock repairs this itself within a few seconds (see [How it works](#how-it-works)). It happens when explorer's AppBar manager gets stuck, for example after wdock was restarted many times in a row. If it persists, restart explorer from Task Manager. |
 | Explorer's taskbar did not come back after wdock was killed | Run `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --restore-taskbar`. |
+| wdock lags, or the dock stops appearing | Type `reload` in the launcher (Win+Alt+Space) or click it at the end of wdock's settings. If the UI does not respond, run `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --reload`. The state at that moment goes to `wdock.log`. |
 | A tray icon is missing | Restart the app that owns it. wdock asks apps to re-add their icons at start and again after 5 seconds. |
 | The island shows no cover for a video | The page declares no artwork. The island shows the app's icon instead, and a live view of the window when expanded. |
 | wdock does not start at sign-in | Check that the `wdock` task exists in Task Scheduler, or run `scripts\install.ps1 -NoBuild` again. |
@@ -298,6 +299,7 @@ Command-line modes:
 | none or `--shell` | the shell |
 | `--guard` | the sign-in supervisor |
 | `--dev` | the development supervisor |
+| `--reload` | rebuild the running shell, or restart it if it is hung, then exit |
 | `--restore-taskbar` | restore explorer's taskbar and hidden windows, then exit |
 
 The source is in `crates/wdock/src`:

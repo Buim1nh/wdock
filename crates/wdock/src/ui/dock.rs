@@ -232,6 +232,8 @@ pub struct Dock {
     reveal: f32,
     animating: bool,
     overlapped: bool,
+    /// Hidden by the shell under a full-screen app (game mode).
+    suspended: bool,
 }
 
 impl Dock {
@@ -262,6 +264,7 @@ impl Dock {
             reveal: if config.auto_hide == AutoHide::On { 0.0 } else { 1.0 },
             animating: false,
             overlapped: false,
+            suspended: false,
         };
         dock.refresh();
         dock.overlapped = dock.check_overlap();
@@ -526,6 +529,11 @@ impl Dock {
         };
         let settled = self.zoom == self.zoom_target() && self.reveal == self.reveal_target() && pointer_settled;
         if !settled && !self.animating && !self.hwnd.is_invalid() {
+            if self.reveal <= 0.0 {
+                // Shelf first so the overlay ends up above it.
+                bar::raise(self.shelf);
+                bar::raise(self.hwnd);
+            }
             self.animating = true;
             unsafe { SetTimer(Some(self.hwnd), TIMER_ANIMATE, FRAME_MS, None) };
         }
@@ -560,6 +568,9 @@ impl Dock {
             unsafe {
                 let _ = KillTimer(Some(self.hwnd), TIMER_ANIMATE);
             }
+            // The window that made the dock hide sent its events before the
+            // strip existed, so none will follow to bring it back on top.
+            self.keep_trigger_reachable();
         }
         self.relayout();
         self.sync_shelf();
@@ -588,6 +599,17 @@ impl Dock {
             let r = wininfo::rect(hwnd);
             r.left < dock.right && r.right > dock.left && r.top < dock.bottom && r.bottom > dock.top
         })
+    }
+
+    /// A hidden dock is only its trigger strip, so a topmost window over those
+    /// two pixels (explorer's hidden taskbar sits on the same rows) leaves no
+    /// way to bring it back. Any window event may have changed that, and the
+    /// strip is too thin to get in anyone's way, so it just goes back on top.
+    fn keep_trigger_reachable(&self) {
+        let hidden = self.reveal <= 0.0 && self.auto_hide != AutoHide::Off;
+        if hidden && !self.suspended && !popup::overview_open() && wininfo::has_window_above(self.hwnd) {
+            bar::raise(self.hwnd);
+        }
     }
 
     fn schedule_hide(&self) {
@@ -800,7 +822,37 @@ impl View for Dock {
         Some(self.layout.frame)
     }
 
+    fn suspend(&mut self, suspended: bool) -> bool {
+        self.suspended = suspended;
+        false
+    }
+
+    fn diagnostics(&self) -> Option<String> {
+        let f = self.layout.frame;
+        let probe = POINT { x: (f.left + f.right) / 2, y: f.bottom - 1 };
+        let under = wininfo::window_at(probe);
+        Some(format!(
+            "dock: auto_hide={:?} reveal={:.2} zoom={:.2} overlapped={} suspended={} animating={} pointer={} drag={} frame={},{},{},{} at bottom edge: {} pid {}{}",
+            self.auto_hide,
+            self.reveal,
+            self.zoom,
+            self.overlapped,
+            self.suspended,
+            self.animating,
+            self.pointer.is_some(),
+            self.drag.is_some(),
+            f.left,
+            f.top,
+            f.right,
+            f.bottom,
+            wininfo::class_name(under),
+            wininfo::process_id(under),
+            if under == self.hwnd { " (ours)" } else { "" },
+        ))
+    }
+
     fn model_changed(&mut self) -> bool {
+        self.keep_trigger_reachable();
         let entries_changed = self.refresh();
         let overlapped = self.check_overlap();
         let overlap_changed = std::mem::replace(&mut self.overlapped, overlapped) != overlapped;

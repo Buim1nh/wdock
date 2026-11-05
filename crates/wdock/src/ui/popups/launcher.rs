@@ -136,7 +136,7 @@ fn session_glyph(action: SessionAction) -> &'static str {
         SessionAction::Lock => glyphs::LOCK,
         SessionAction::Sleep => glyphs::SLEEP,
         SessionAction::SignOut => glyphs::SIGN_OUT,
-        SessionAction::Restart => glyphs::RESTART,
+        SessionAction::Restart | SessionAction::ReloadWdock => glyphs::RESTART,
         SessionAction::ShutDown => glyphs::POWER,
     }
 }

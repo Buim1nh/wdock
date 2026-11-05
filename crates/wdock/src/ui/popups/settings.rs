@@ -50,9 +50,10 @@ enum Setting {
     IslandOrder,
     SignIn,
     OpenFile,
+    Reload,
 }
 
-const ROWS: [(Setting, &str); 20] = [
+const ROWS: [(Setting, &str); 21] = [
     (Setting::Theme, "Theme"),
     (Setting::Backdrop, "Backdrop"),
     (Setting::Font, "Font"),
@@ -73,6 +74,7 @@ const ROWS: [(Setting, &str); 20] = [
     (Setting::IslandOrder, "Order (M/F)"),
     (Setting::SignIn, "Start at sign-in"),
     (Setting::OpenFile, "Open config file"),
+    (Setting::Reload, "Reload wdock"),
 ];
 
 const WINDOWS_FONT_SCRIPT: &str = include_str!("../../../../../scripts/windows-font.ps1");
@@ -151,7 +153,7 @@ impl Setting {
                 .iter().map(|s| if *s == "media" { "M" } else { "F" })
                 .collect::<Vec<_>>().join(" · "),
             Self::SignIn => on_off(sign_in),
-            Self::OpenFile => "",
+            Self::OpenFile | Self::Reload => "",
         }.to_owned()
     }
 
@@ -221,6 +223,7 @@ impl Setting {
             }
             Self::SignIn => Change::SignIn(!sign_in),
             Self::OpenFile => Change::OpenFile,
+            Self::Reload => Change::Reload,
             Self::WindowsFont => Change::WindowsFont { restore: false },
             Self::WindowsFontRestore => Change::WindowsFont { restore: true },
         }
@@ -247,6 +250,7 @@ enum Change {
     Key(&'static str, &'static str, String),
     SignIn(bool),
     OpenFile,
+    Reload,
     WindowsFont { restore: bool },
 }
 
@@ -486,6 +490,10 @@ impl View for SettingsView {
             Change::OpenFile => {
                 launch::open(&config::path().display().to_string());
                 bar::close(self.hwnd);
+                false
+            }
+            Change::Reload => {
+                app::reload();
                 false
             }
             Change::WindowsFont { restore } => {
