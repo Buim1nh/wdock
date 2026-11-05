@@ -5,6 +5,7 @@
 
 pub mod apps_index;
 pub mod audio;
+pub mod bluetooth;
 pub mod brightness;
 pub mod icons;
 pub mod lyrics;

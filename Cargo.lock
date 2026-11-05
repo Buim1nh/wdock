@@ -162,6 +162,7 @@ dependencies = [
  "toml",
  "windows 0.58.0",
  "windows 0.62.2",
+ "windows-collections",
  "windows-core 0.62.2",
  "windows-future",
  "windows-numerics",

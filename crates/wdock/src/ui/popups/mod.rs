@@ -1,4 +1,5 @@
 pub mod balloon;
+pub mod bluetooth_panel;
 pub mod calendar;
 pub mod bookmarks;
 pub mod clipboard;

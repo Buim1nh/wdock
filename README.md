@@ -64,6 +64,9 @@ All screenshots are 1920×1080.
   - Clicking a network that has a saved profile connects to it. For a new network wdock never asks for a password itself; it opens Windows' Wi-Fi settings instead.
   - A Wi-Fi on/off switch and a Disconnect action. Machines without Wi-Fi show the list as unavailable.
   - Networks are scanned only while the list is open.
+- **Bluetooth:** a row below Network expands into paired devices, with connected devices first and battery percentage when Windows exposes it. The row is hidden without a Bluetooth radio.
+  - Turn the radio on/off and connect or disconnect paired audio devices. Unsupported devices, denied access and driver failures open Windows Bluetooth settings. Pairing stays in Windows Settings; wdock never asks for a PIN.
+  - Wi-Fi and Bluetooth form an accordion. Bluetooth discovery and event subscriptions exist only while its panel is open; opening Quick settings also performs a single background read for the row. Nothing polls.
 - **Sound:** a volume slider, plus a list of the active outputs (speakers, headphones, HDMI, Bluetooth).
   - Clicking an output makes it the default for every role, and the slider follows it.
   - This uses the undocumented `IPolicyConfig` interface, as other output switchers do. If Windows refuses, the Sound settings page opens instead.
