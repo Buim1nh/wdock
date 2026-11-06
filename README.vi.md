@@ -61,7 +61,8 @@ Tất cả ảnh có độ phân giải 1920×1080.
 
 - **Mạng:** dòng kết nối mở rộng ra thành danh sách các mạng Wi-Fi đang thấy.
   - Mỗi mạng có tên, vạch sóng, ổ khóa nếu có mật khẩu, và chữ "Connected" ở mạng đang dùng. Danh sách sắp theo độ mạnh sóng, có nút quét lại.
-  - Bấm vào mạng đã có profile lưu sẵn thì kết nối luôn. Với mạng mới, wdock không tự hỏi mật khẩu mà mở trang Wi-Fi của Windows.
+  - Bấm vào mạng đã có profile lưu sẵn thì kết nối luôn. Với mạng mới, wdock không tự hỏi mật khẩu mà mở flyout Wi-Fi của Windows để bạn chọn mạng và nhập mật khẩu ở đó.
+  - Khi Windows báo captive portal (mạng cần đăng nhập qua web), wdock mở trang đăng nhập bằng trình duyệt mặc định, mỗi kết nối một lần và không mở đè lên app toàn màn hình. Nút **Open sign-in page** trong danh sách dùng cho các portal mà Windows chỉ báo là local access.
   - Có công tắc bật/tắt Wi-Fi và nút ngắt kết nối. Máy không có Wi-Fi sẽ báo danh sách không khả dụng.
   - Chỉ quét mạng khi danh sách đang mở.
 - **Âm thanh:** thanh âm lượng và danh sách thiết bị phát đang hoạt động (loa, tai nghe, HDMI, Bluetooth).

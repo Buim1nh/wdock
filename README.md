@@ -61,7 +61,8 @@ All screenshots are 1920×1080.
 
 - **Network:** the connection row expands into the visible Wi-Fi networks.
   - Each network shows its name, signal bars, a lock if it is secured, and "Connected" for the current one, sorted by signal. A button rescans.
-  - Clicking a network that has a saved profile connects to it. For a new network wdock never asks for a password itself; it opens Windows' Wi-Fi settings instead.
+  - Clicking a network that has a saved profile connects to it. For a new network wdock never asks for a password itself; it opens Windows' own Wi-Fi flyout, where you pick the network and type the password.
+  - When Windows reports a captive portal (a network that needs web sign-in), wdock opens the sign-in page in your default browser, once per connection and never over a full-screen app. An **Open sign-in page** button in the list covers portals Windows only reports as local access.
   - A Wi-Fi on/off switch and a Disconnect action. Machines without Wi-Fi show the list as unavailable.
   - Networks are scanned only while the list is open.
 - **Sound:** a volume slider, plus a list of the active outputs (speakers, headphones, HDMI, Bluetooth).

@@ -48,6 +48,17 @@ pub enum NetState {
     },
 }
 
+/// Whether the connected network holds the internet behind a sign-in page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Portal {
+    #[default]
+    None,
+    /// Wi-Fi with local access only: it may be a portal Windows did not identify.
+    Possible,
+    /// Windows reports captive-portal connectivity.
+    Detected,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Battery {
     pub percent: u8,
@@ -60,6 +71,7 @@ pub struct SystemStatus {
     pub volume: Option<Volume>,
     pub microphone: Option<Volume>,
     pub network: NetState,
+    pub portal: Portal,
     pub battery: Option<Battery>,
     /// Built-in panel level; `None` until known, or without software control.
     pub brightness: Option<u8>,
@@ -79,6 +91,18 @@ struct Services {
     _power: power::Power,
     brightness: brightness::Brightness,
     status: SystemStatus,
+    /// The connection whose sign-in page was already opened, so a portal that
+    /// flaps while the user signs in does not open it again.
+    portal_opened: Option<String>,
+}
+
+/// Identity of a connection; signal strength does not change it.
+fn connection_id(state: &NetState) -> Option<&str> {
+    match state {
+        NetState::Offline => None,
+        NetState::Wired => Some(""),
+        NetState::Wifi { ssid, .. } => Some(ssid),
+    }
 }
 
 thread_local! {
@@ -95,6 +119,7 @@ pub fn start(target: HWND) {
             volume: audio.as_ref().and_then(audio::Audio::state),
             microphone: microphone.as_ref().and_then(audio::Audio::state),
             network: network.state(),
+            portal: network.portal(),
             battery: power::battery(),
             brightness: None,
             displays: Vec::new(),
@@ -106,6 +131,7 @@ pub fn start(target: HWND) {
         network,
         _power: power::Power::register(target),
         brightness: brightness::Brightness::start(target),
+        portal_opened: None,
     };
     log::info!("status: {:?}", services.status);
     SERVICES.set(Some(services));
@@ -167,7 +193,13 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
                 audio::MIC_PENDING.store(false, std::sync::atomic::Ordering::Release);
                 s.status.microphone = s.microphone.as_ref().and_then(audio::Audio::state);
             }
-            KIND_NETWORK => s.status.network = s.network.state(),
+            KIND_NETWORK => {
+                s.status.network = s.network.state();
+                s.status.portal = s.network.portal();
+                if s.portal_opened.as_deref() != connection_id(&s.status.network) {
+                    s.portal_opened = None;
+                }
+            }
             KIND_BRIGHTNESS => {
                 s.status.displays = brightness::displays();
                 s.status.brightness =
@@ -178,6 +210,22 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
         s.status != before
     })
     .unwrap_or(false)
+}
+
+/// Whether a detected portal still waits for its sign-in page to be opened.
+pub fn portal_due() -> bool {
+    with(|s| s.status.portal == Portal::Detected && s.portal_opened.is_none()).unwrap_or(false)
+}
+
+/// Opens the sign-in page, once per connection.
+pub fn open_portal() {
+    with(|s| {
+        if s.status.portal == Portal::Detected && s.portal_opened.is_none() {
+            s.portal_opened = connection_id(&s.status.network).map(str::to_owned);
+            log::info!("captive portal on {:?}: opening the sign-in page", s.status.network);
+            crate::platform::launch::open(network::SIGN_IN_PAGE);
+        }
+    });
 }
 
 /// Handles WM_POWERBROADCAST.

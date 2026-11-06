@@ -15,12 +15,27 @@ use windows::Win32::NetworkManagement::WiFi::{
     WlanRegisterNotification, wlan_interface_state_connected, wlan_intf_opcode_current_connection,
 };
 use windows::Win32::Networking::WinSock::{
-    NL_NETWORK_CONNECTIVITY_HINT, NetworkConnectivityLevelHintConstrainedInternetAccess,
-    NetworkConnectivityLevelHintInternetAccess,
+    NL_NETWORK_CONNECTIVITY_HINT, NL_NETWORK_CONNECTIVITY_LEVEL_HINT, NetworkConnectivityLevelHintConstrainedInternetAccess,
+    NetworkConnectivityLevelHintInternetAccess, NetworkConnectivityLevelHintLocalAccess,
 };
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
-use super::{KIND_NETWORK, NetState, WM_APP_STATUS};
+use super::{KIND_NETWORK, NetState, Portal, WM_APP_STATUS};
+
+/// Windows' own portal probe. A portal redirects it to its sign-in page. Only
+/// the user's browser loads it; wdock itself makes no request.
+pub const SIGN_IN_PAGE: &str = "http://www.msftconnecttest.com/redirect";
+
+fn portal_for(level: NL_NETWORK_CONNECTIVITY_LEVEL_HINT, on_wifi: bool) -> Portal {
+    if level == NetworkConnectivityLevelHintConstrainedInternetAccess {
+        Portal::Detected
+    } else if level == NetworkConnectivityLevelHintLocalAccess && on_wifi {
+        // Windows does not always identify a portal: it can stay at local access.
+        Portal::Possible
+    } else {
+        Portal::None
+    }
+}
 
 fn post(context: *const c_void) {
     let _ = unsafe { PostMessageW(Some(HWND(context as *mut _)), WM_APP_STATUS, WPARAM(KIND_NETWORK), LPARAM(0)) };
@@ -84,6 +99,14 @@ impl Network {
         if online { NetState::Wired } else { NetState::Offline }
     }
 
+    pub fn portal(&self) -> Portal {
+        let mut hint = NL_NETWORK_CONNECTIVITY_HINT::default();
+        if unsafe { GetNetworkConnectivityHint(&mut hint) }.is_err() {
+            return Portal::None;
+        }
+        portal_for(hint.ConnectivityLevel, self.wifi().is_some())
+    }
+
     /// SSID and signal quality (0-100) of the first connected Wi-Fi interface.
     fn wifi(&self) -> Option<(String, u32)> {
         let handle = self.wlan?;
@@ -133,5 +156,22 @@ impl Drop for Network {
                 let _ = CancelMibChangeNotify2(hint);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Networking::WinSock::{NetworkConnectivityLevelHintNone, NetworkConnectivityLevelHintUnknown};
+
+    #[test]
+    fn portal_follows_the_connectivity_level() {
+        assert_eq!(portal_for(NetworkConnectivityLevelHintConstrainedInternetAccess, true), Portal::Detected);
+        assert_eq!(portal_for(NetworkConnectivityLevelHintConstrainedInternetAccess, false), Portal::Detected);
+        assert_eq!(portal_for(NetworkConnectivityLevelHintLocalAccess, true), Portal::Possible);
+        assert_eq!(portal_for(NetworkConnectivityLevelHintLocalAccess, false), Portal::None);
+        assert_eq!(portal_for(NetworkConnectivityLevelHintInternetAccess, true), Portal::None);
+        assert_eq!(portal_for(NetworkConnectivityLevelHintNone, true), Portal::None);
+        assert_eq!(portal_for(NetworkConnectivityLevelHintUnknown, true), Portal::None);
     }
 }

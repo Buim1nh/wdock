@@ -82,6 +82,10 @@ const TIMER_REBUILD: usize = 1;
 const TIMER_RECLAIM: usize = 3;
 const TIMER_POMODORO: usize = 4;
 const TIMER_APPBAR: usize = 5;
+const TIMER_PORTAL: usize = 6;
+/// A new connection can pass through portal-like states while Windows probes
+/// it, so a browser only opens if the portal is still there after this delay.
+const PORTAL_SETTLE_MS: u32 = 3000;
 /// Explorer applies a reservation asynchronously; check it this long after.
 const APPBAR_CHECK_MS: u32 = 1500;
 /// Some apps (Steam) ignore a TaskbarCreated that arrives soon after another
@@ -435,6 +439,9 @@ pub fn run(mode: Mode) -> Result<()> {
     // taskbar to the top, and our tray must end up above it.
     explorer::hide_taskbar();
     services::start(hwnd);
+    if services::portal_due() {
+        unsafe { SetTimer(Some(hwnd), TIMER_PORTAL, PORTAL_SETTLE_MS, None) };
+    }
     apps_index::start(hwnd);
     if config.island.enabled {
         media::start(hwnd);
@@ -638,6 +645,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             if services::handle_message(wparam, lparam) {
                 with_shell(|shell| shell.notify_bars());
             }
+            if wparam.0 == services::KIND_NETWORK && services::portal_due() {
+                unsafe { SetTimer(Some(hwnd), TIMER_PORTAL, PORTAL_SETTLE_MS, None) };
+            }
             LRESULT(0)
         }
         WM_POWERBROADCAST => {
@@ -705,6 +715,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             with_shell(|shell| idle = shell.fullscreen.is_none());
             if idle && appbar::verify() {
                 check_appbars_later();
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_PORTAL => {
+            let _ = unsafe { KillTimer(Some(hwnd), TIMER_PORTAL) };
+            // A browser must not take focus from a full-screen game; quick
+            // settings still offers the sign-in page.
+            if !popup::game_mode() {
+                services::open_portal();
             }
             LRESULT(0)
         }
