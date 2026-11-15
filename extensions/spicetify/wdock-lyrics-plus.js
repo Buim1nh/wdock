@@ -1,5 +1,5 @@
 // WDock companion for Spicy Lyrics and Lyrics Plus in Spicetify.
-// Sends only the currently rendered lyric lines to the local WDock process.
+// Sends cached timed lyrics and, when needed, the currently rendered lines.
 (() => {
     const endpoint = 'http://127.0.0.1:43179/spotify-lyrics';
     let last = '';
@@ -10,9 +10,6 @@
     let palette = [];
     let paletteAt = 0;
     let paletteTrack = '';
-    let capturedCanvas = null;
-    let captureVideo = null;
-    let captureStream = null;
     let coverUrl = '';
     let coverImage = null;
     let timedTrack = '';
@@ -20,21 +17,51 @@
     let timedBusy = false;
     let timedAttempt = 0;
     let syncCheckedAt = 0;
+    let bridgeUnavailableUntil = 0;
+    let timedConfirmed = false;
+
+    function setTimedConfirmed(confirmed) {
+        if (timedConfirmed === confirmed) return;
+        timedConfirmed = confirmed;
+        if (confirmed) {
+            observer.disconnect();
+            discovery.disconnect();
+        } else {
+            page = null;
+            discovery.observe(document.documentElement, { childList: true, subtree: true });
+        }
+    }
 
     async function sendTimed() {
         const item = window.Spicetify?.Player?.data?.item;
         const uri = String(item?.uri || '');
         const match = /^spotify:track:([a-zA-Z0-9]+)$/.exec(uri);
+        // A local file, podcast or stopped player must restore DOM observers;
+        // those items do not have a cacheable spotify:track URI.
+        if (timedConfirmed && timedTrack !== uri) setTimedConfirmed(false);
         if (!match || !item?.metadata?.title || !item?.metadata?.artist_name || typeof caches === 'undefined') return;
-        if (timedBusy || Date.now() - timedAttempt < 2000) return;
+        if (timedBusy || Date.now() < bridgeUnavailableUntil || Date.now() - timedAttempt < 2000) return;
         if (timedTrack === uri && Date.now() - syncCheckedAt < 5000) return;
         timedBusy = true; timedAttempt = Date.now();
         try {
             if (timedTrack === uri) {
                 syncCheckedAt = Date.now();
                 const response = await fetch('http://127.0.0.1:43179/spotify-sync', { cache: 'no-store' });
-                if (response.ok && (await response.json()).ready && (timedHasColors || !backgroundColors(uri, item.metadata.image_url).length)) return;
+                if (response.ok && (await response.json()).ready && (timedHasColors || !backgroundColors(uri, item.metadata.image_url).length)) {
+                    setTimedConfirmed(true);
+                    return;
+                }
+                setTimedConfirmed(false);
                 timedTrack = '';
+            }
+            // Avoid repeatedly decoding the full lyric cache while WDock is
+            // closed. A no-cors probe only checks reachability, not contents.
+            try {
+                await fetch('http://127.0.0.1:43179/now', { mode: 'no-cors', cache: 'no-store' });
+                bridgeUnavailableUntil = 0;
+            } catch (_) {
+                bridgeUnavailableUntil = Date.now() + 10000;
+                return;
             }
             if (!(await caches.keys()).includes('SpicyLyrics_LyricsStore_g1')) return;
             const cache = await caches.open('SpicyLyrics_LyricsStore_g1');
@@ -69,6 +96,7 @@
             // A failed status request must not strand a previously sent track
             // after WDock restarts or the loopback connection drops.
             timedTrack = '';
+            setTimedConfirmed(false);
         }
         finally { timedBusy = false; }
     }
@@ -89,25 +117,6 @@
         return coverImage?.complete && coverImage.naturalWidth ? coverImage : null;
     }
 
-    function canvasFrame(source) {
-        if (source !== capturedCanvas) {
-            captureStream?.getTracks().forEach(track => track.stop());
-            capturedCanvas = source;
-            captureVideo = null;
-            captureStream = null;
-            try {
-                if (typeof source.captureStream === 'function') {
-                    captureStream = source.captureStream(8);
-                    captureVideo = document.createElement('video');
-                    captureVideo.muted = true;
-                    captureVideo.srcObject = captureStream;
-                    captureVideo.play().catch(() => {});
-                }
-            } catch (_) { captureVideo = null; captureStream = null; }
-        }
-        return captureVideo?.readyState >= 2 ? captureVideo : source;
-    }
-
     function backgroundColors(track, image) {
         const now = Date.now();
         if (track !== paletteTrack) { palette = []; paletteAt = 0; paletteTrack = track; }
@@ -124,7 +133,7 @@
             const canvas = document.createElement('canvas');
             canvas.width = 12; canvas.height = 8;
             const context = canvas.getContext('2d', { willReadFrequently: true });
-            context.drawImage(canvasFrame(source), 0, 0, canvas.width, canvas.height);
+            context.drawImage(source, 0, 0, canvas.width, canvas.height);
             const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
             const colors = [];
             let brightness = 0;
@@ -227,7 +236,7 @@
         queued = false;
         // Chromium can suspend the lyric renderer while Spotify is hidden.
         // Re-sending its last DOM state would keep stale lyrics alive in WDock.
-        if (document.hidden) { last = ''; return; }
+        if (document.hidden || timedConfirmed || Date.now() < bridgeUnavailableUntil) { last = ''; return; }
         const data = snapshot();
         if (!data) { last = ''; return; }
         const body = JSON.stringify(data);
@@ -241,9 +250,11 @@
     }
 
     const observer = new MutationObserver(() => {
+        if (document.hidden || timedConfirmed || Date.now() < bridgeUnavailableUntil) return;
         if (!queued) { queued = true; setTimeout(send, 150); }
     });
     function findPage() {
+        if (document.hidden || timedConfirmed || Date.now() < bridgeUnavailableUntil) return;
         // The same renderer can be mounted inside the right-hand Now Playing
         // card, or in the full page. Do not select an invisible stale mount.
         const spicy = [...document.querySelectorAll('#SpicyLyricsPage .LyricsContainer .LyricsContent')]
@@ -258,10 +269,6 @@
         page = next;
         pageSource = source;
         last = '';
-        if (!page && captureStream) {
-            captureStream.getTracks().forEach(track => track.stop());
-            captureStream = null; captureVideo = null; capturedCanvas = null;
-        }
         if (page) observer.observe(page, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
         send();
     }
@@ -270,5 +277,5 @@
     findPage();
     // Follow word gradients while the page is present; the unchanged-payload
     // guard prevents network work when the lyrics and background are idle.
-    setInterval(() => { findPage(); send(); sendTimed(); }, 100);
+    setInterval(() => { if (!timedConfirmed && !document.hidden && Date.now() >= bridgeUnavailableUntil) { findPage(); send(); } sendTimed(); }, 250);
 })();

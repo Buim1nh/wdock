@@ -125,7 +125,9 @@ unsafe extern "system" fn callback(
     }
     // Most create/show/hide events are for child controls; drop those early.
     // Destroyed windows can no longer be inspected, so those always pass.
-    if event != EVENT_OBJECT_DESTROY && !wininfo::is_top_level(hwnd) {
+    // Foreground notifications already identify the active top-level window;
+    // avoid another cross-process GetAncestor call on every Alt+Tab step.
+    if event != EVENT_OBJECT_DESTROY && event != EVENT_SYSTEM_FOREGROUND && !wininfo::is_top_level(hwnd) {
         return;
     }
     QUEUE.with_borrow_mut(|queue| queue.push((event, hwnd)));

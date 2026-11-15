@@ -21,7 +21,9 @@ if (Test-Path -LiteralPath $destination) {
             '0a13bc88af28d5b0283f8351595ae76bc399214204e9829b8dd6fc56f5d19fea',
             '4501052f64d0af7deb05e44e6b421458f64dd6a5083b1b7977980f4ea908bc6e',
             'f69a439c2d9bad3f4392907a9a11d646433832f1eb1374aa0556a369a3a5f06e',
-            '6df970c560c837573c9548533e482c8dac07dd7ec4b5f9a2043b37a4e2b3451f'
+            '6df970c560c837573c9548533e482c8dac07dd7ec4b5f9a2043b37a4e2b3451f',
+            '1b17f2861b1e56dd4b037a135cbe3de107707678a564fc8ef6053b64c6e3ff4d',
+            'e801ab6fe7355820a0ff63eba6122879711a6e32ec2a97122b5b61fd6290519e'
         )
         if ($hash -notin $knownVersions) {
             throw "An unrecognized file already exists at $destination. Inspect it before replacing it."
