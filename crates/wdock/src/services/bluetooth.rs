@@ -585,4 +585,59 @@ mod tests {
             assert_eq!(size_of::<KSIDENTIFIER>(), 24);
         }
     }
+
+    fn wait(session: &Session, what: &str, done: impl Fn(&Snapshot) -> bool) -> Snapshot {
+        for _ in 0..300 {
+            let snapshot = session.snapshot();
+            if done(&snapshot) { return snapshot; }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("timed out waiting for {what}: {:?}", session.snapshot());
+    }
+
+    #[test]
+    #[ignore = "switches the real Bluetooth radio and the first paired audio device"]
+    fn real_radio_and_audio_device_round_trip() {
+        let session = Session::open(HWND::default());
+        let first = wait(&session, "first snapshot", |s| s.ready);
+        println!("initial: on={} {:?}", first.on, first.devices);
+        assert!(first.available, "no Bluetooth radio");
+        let audio = first.devices.iter().find(|d| d.kind == Kind::Audio).expect("a paired audio device").clone();
+        session.activate(&audio.id);
+        let flipped = wait(&session, "audio device to change", |s| s.devices.iter().any(|d| d.id == audio.id && d.connected != audio.connected));
+        println!("after activate: {:?}", flipped.devices.iter().find(|d| d.id == audio.id));
+        session.activate(&audio.id);
+        let restored = wait(&session, "audio device to restore", |s| s.devices.iter().any(|d| d.id == audio.id && d.connected == audio.connected));
+        println!("restored: {:?}", restored.devices.iter().find(|d| d.id == audio.id));
+        session.set_radio(!first.on);
+        wait(&session, "radio to change", |s| s.on != first.on);
+        session.set_radio(first.on);
+        wait(&session, "radio to restore", |s| s.on == first.on);
+        println!("radio round trip ok");
+    }
+
+    #[test]
+    #[ignore = "reads the real Bluetooth radio and devices"]
+    fn reading_bluetooth_costs_little_memory_and_releases_its_worker() {
+        fn private_mb() -> f64 {
+            let script = format!("(Get-Process -Id {}).PrivateMemorySize64", std::process::id());
+            let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().unwrap() / 1048576.0
+        }
+        let before = private_mb();
+        for _ in 0..6 {
+            let probe = Probe::open(HWND::default());
+            for _ in 0..100 { if probe.snapshot().ready { break; } std::thread::sleep(std::time::Duration::from_millis(50)); }
+            drop(probe);
+            let session = Session::open(HWND::default());
+            wait(&session, "panel snapshot", |s| s.ready);
+            drop(session);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            println!("after cycle: {:.1} MB", private_mb());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let after = private_mb();
+        println!("private bytes: {before:.1} MB -> {after:.1} MB");
+        assert!(after - before < 8.0, "Bluetooth readers kept {:.1} MB", after - before);
+    }
 }

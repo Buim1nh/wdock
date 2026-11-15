@@ -61,7 +61,8 @@ All screenshots are 1920×1080.
 
 - **Network:** the connection row expands into the visible Wi-Fi networks.
   - Each network shows its name, signal bars, a lock if it is secured, and "Connected" for the current one, sorted by signal. A button rescans.
-  - Clicking a network that has a saved profile connects to it. For a new network wdock never asks for a password itself; it opens Windows' Wi-Fi settings instead.
+  - Clicking a network that has a saved profile connects to it. For a new network wdock never asks for a password itself; it opens Windows' own Wi-Fi flyout, where you pick the network and type the password.
+  - When Windows reports a captive portal (a network that needs web sign-in), wdock opens the sign-in page in your default browser, once per connection and never over a full-screen app. An **Open sign-in page** button in the list covers portals Windows only reports as local access.
   - A Wi-Fi on/off switch and a Disconnect action. Machines without Wi-Fi show the list as unavailable.
   - Networks are scanned only while the list is open.
 - **Bluetooth:** a row below Network expands into paired devices, with connected devices first and battery percentage when Windows exposes it. The row is hidden without a Bluetooth radio.
@@ -71,6 +72,7 @@ All screenshots are 1920×1080.
   - Clicking an output makes it the default for every role, and the slider follows it.
   - This uses the undocumented `IPolicyConfig` interface, as other output switchers do. If Windows refuses, the Sound settings page opens instead.
 - **Microphone and camera:** adjust input level, mute/unmute and select the default microphone in Quick Settings. Camera preview uses wdock's theme, font and rounded controls, with keyboard navigation, an inline error state, a next-camera button and Windows camera settings. Closing the preview releases the camera; no capture runs in the background.
+- **Quick toggles:** Project (PC screen only, duplicate, extend, second screen only), Night light, Energy saver and Airplane mode. Each change runs on a worker and reports back; nothing polls while the panel is open.
 - **Display:** one brightness slider per screen that can be controlled, named after the monitor: the laptop panel through WMI, external monitors through DDC/CI. Monitors without DDC/CI show nothing. Screens are detected at start, on display changes and after resume (never polled), on a worker thread; dragging sends at most one write per 100 ms plus the final value.
 - **Battery** state, and buttons to lock, sleep, sign out, restart, shut down and open Settings. Power actions ask for confirmation.
 

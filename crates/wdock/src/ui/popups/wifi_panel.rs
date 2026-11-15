@@ -1,7 +1,8 @@
 //! The expandable Wi-Fi list inside quick settings. It owns a `wifi::Session`
 //! only while expanded; collapsing or closing the popover drops it, which
 //! stops the notifications. Networks without a saved profile are handed to
-//! Windows' own Wi-Fi settings: wdock never asks for a password.
+//! Windows' own Wi-Fi flyout, which still opens with the taskbar hidden:
+//! wdock never asks for a password.
 
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectWrite::{
@@ -10,6 +11,8 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::Foundation::HWND;
 
 use crate::platform::launch;
+use crate::services::Portal;
+use crate::services::network::SIGN_IN_PAGE;
 use crate::services::wifi::{self, AccessPoint, Session};
 use crate::ui::bar::PaintCx;
 use crate::ui::gfx::{rect, rounded};
@@ -21,6 +24,7 @@ const ROW: f32 = 36.0;
 const FOOTER: f32 = 30.0;
 const MAX_ROWS: usize = 5;
 const SETTINGS_PAGE: &str = "ms-settings:network-wifi";
+const JOIN_FLYOUT: &str = "ms-availablenetworks:";
 const REFRESH: &str = "\u{E72C}";
 const SSID_CHARS: usize = 26;
 
@@ -30,6 +34,7 @@ pub enum WifiHit {
     Refresh,
     Disconnect,
     Settings,
+    SignIn,
     /// Index into the full list, not the visible window.
     Row(usize),
 }
@@ -46,6 +51,7 @@ pub struct WifiPanel {
     session: Option<Session>,
     networks: Vec<AccessPoint>,
     radio: Option<bool>,
+    portal: Portal,
     scroll: usize,
     searching: bool,
     targets: Vec<(WifiHit, D2D_RECT_F)>,
@@ -63,11 +69,15 @@ fn shorten(ssid: &str) -> String {
 impl WifiPanel {
     /// Opens the WLAN session and scans once. Without Wi-Fi hardware the panel
     /// still opens and says so.
-    pub fn open(notify: HWND) -> Self {
+    pub fn open(notify: HWND, portal: Portal) -> Self {
         let session = Session::open(notify);
-        let mut panel = Self { session, networks: Vec::new(), radio: None, scroll: 0, searching: true, targets: Vec::new(), message_area: rect(0.0, 0.0, 0.0, 0.0), header: rect(0.0, 0.0, 0.0, 0.0) };
+        let mut panel = Self { session, networks: Vec::new(), radio: None, portal, scroll: 0, searching: true, targets: Vec::new(), message_area: rect(0.0, 0.0, 0.0, 0.0), header: rect(0.0, 0.0, 0.0, 0.0) };
         panel.reload();
         panel
+    }
+
+    pub fn set_portal(&mut self, portal: Portal) {
+        self.portal = portal;
     }
 
     fn reload(&mut self) {
@@ -126,6 +136,10 @@ impl WifiPanel {
             }
         }
         y += 6.0 * s;
+        if self.portal != Portal::None {
+            self.targets.push((WifiHit::SignIn, rect(left, y, right, y + FOOTER * s)));
+            y += (FOOTER + 6.0) * s;
+        }
         if self.session.is_some() {
             let half = (right - left) / 2.0;
             if self.connected() {
@@ -187,6 +201,10 @@ impl WifiPanel {
                 launch::open(SETTINGS_PAGE);
                 Outcome::Close
             }
+            WifiHit::SignIn => {
+                launch::open(SIGN_IN_PAGE);
+                Outcome::Close
+            }
             WifiHit::Row(index) => {
                 let Some(network) = self.networks.get(index) else {
                     return Outcome::Nothing;
@@ -197,7 +215,7 @@ impl WifiPanel {
                 match (&network.profile, &self.session) {
                     (Some(profile), Some(session)) if session.connect(profile) => Outcome::Nothing,
                     _ => {
-                        launch::open(SETTINGS_PAGE);
+                        launch::open(JOIN_FLYOUT);
                         Outcome::Close
                     }
                 }
@@ -240,9 +258,13 @@ impl WifiPanel {
                     fill(r, 12.0 * s, plate(hit));
                     text::draw(cx, REFRESH, &icon, r, theme.text);
                 }
-                WifiHit::Disconnect | WifiHit::Settings => {
+                WifiHit::Disconnect | WifiHit::Settings | WifiHit::SignIn => {
                     fill(r, 12.0 * s, plate(hit));
-                    let label = if hit == WifiHit::Disconnect { "Disconnect" } else { "Wi-Fi settings" };
+                    let label = match hit {
+                        WifiHit::Disconnect => "Disconnect",
+                        WifiHit::SignIn => "Open sign-in page",
+                        _ => "Wi-Fi settings",
+                    };
                     text::draw(cx, label, &centred, r, theme.text);
                 }
                 WifiHit::Row(index) => {

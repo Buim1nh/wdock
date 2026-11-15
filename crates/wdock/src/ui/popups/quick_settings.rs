@@ -16,7 +16,7 @@ use crate::platform::{launch, monitors};
 use crate::platform::session::{self, SessionAction};
 use crate::services::audio::{Output, OutputKind};
 use crate::services::bluetooth::{Probe, Snapshot};
-use crate::services::{self, NetState, SystemStatus};
+use crate::services::{self, NetState, Portal, SystemStatus};
 use crate::ui::bar::{self, Button, PaintCx, View};
 use crate::ui::gfx::{rect, rounded};
 use crate::ui::glyphs;
@@ -28,6 +28,7 @@ use crate::ui::text;
 const WIDTH: f32 = 300.0;
 const PADDING: f32 = 14.0;
 const TILE: f32 = 52.0;
+const QUICK_TILE_HEIGHT: f32 = 54.0;
 const LABEL: f32 = 22.0;
 const SLIDER_ROW: f32 = 32.0;
 const ICON_BUTTON: f32 = 30.0;
@@ -38,6 +39,7 @@ const GAP: f32 = 10.0;
 const TIMER_CONFIRM: usize = 1;
 const TIMER_PANEL_ANIMATE: usize = 2;
 const PANEL_FRAME_MS: u32 = 15;
+const TIMER_QUICK_STATE: usize = 3;
 const PANEL_RADIUS: f32 = 16.0;
 const CONFIRM_MS: u32 = 3000;
 
@@ -48,7 +50,7 @@ fn animate_panel(progress: f32, open: bool) -> (f32, bool) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Panel { Wifi, Bluetooth }
+enum Panel { Wifi, Bluetooth, Projection }
 
 fn accordion(current: Option<Panel>, clicked: Panel) -> Option<Panel> {
     if current == Some(clicked) { None } else { Some(clicked) }
@@ -60,6 +62,11 @@ enum Hit {
     Wifi(WifiHit),
     Bluetooth,
     BluetoothPanel(BluetoothHit),
+    Projection,
+    ProjectionMode(usize),
+    NightLight,
+    EnergySaver,
+    Airplane,
     Mute,
     MicMute,
     Microphone,
@@ -86,6 +93,13 @@ const POWER_ROW: [(Hit, &str, &str); 6] = [
     (Hit::Session(SessionAction::Restart), glyphs::RESTART, "Restart"),
     (Hit::Session(SessionAction::ShutDown), glyphs::POWER, "Shut down"),
     (Hit::Settings, glyphs::SETTINGS, "Settings"),
+];
+
+const QUICK_TILES: [(Hit, &str, &str); 4] = [
+    (Hit::Projection, glyphs::DISPLAY, "Project"),
+    (Hit::NightLight, "\u{E708}", "Night light"),
+    (Hit::EnergySaver, "\u{E945}", "Energy saver"),
+    (Hit::Airplane, "\u{E709}", "Airplane"),
 ];
 
 struct Drag {
@@ -122,6 +136,10 @@ pub struct QuickSettingsView {
     bluetooth: Option<BluetoothPanel>,
     bluetooth_progress: f32,
     bluetooth_clip: D2D_RECT_F,
+    quick_message: Option<String>,
+    energy_saver: Option<bool>,
+    night_light: Option<bool>,
+    airplane: Option<bool>,
 }
 
 impl QuickSettingsView {
@@ -162,6 +180,10 @@ impl QuickSettingsView {
             bluetooth: None,
             bluetooth_progress: 0.0,
             bluetooth_clip: rect(0.0, 0.0, 0.0, 0.0),
+            quick_message: None,
+            energy_saver: services::quick_controls::energy_saver(),
+            night_light: services::quick_controls::night_light(),
+            airplane: services::quick_controls::airplane(),
         };
         view.layout();
         view
@@ -194,6 +216,22 @@ impl QuickSettingsView {
             let visible = (bottom - top) * self.bluetooth_progress;
             self.bluetooth_clip = rect(left, top, right, top + visible);
             y += (bottom - top + GAP * s / 2.0) * self.bluetooth_progress;
+        }
+
+        let tile_gap = 5.0 * s;
+        let tile_width = (right - left - 3.0 * tile_gap) / 4.0;
+        for (i, (hit, _, _)) in QUICK_TILES.iter().enumerate() {
+            let x = left + i as f32 * (tile_width + tile_gap);
+            self.targets.push((*hit, rect(x, y, x + tile_width, y + QUICK_TILE_HEIGHT * s)));
+        }
+        y += (QUICK_TILE_HEIGHT * s) + GAP * s;
+
+        if self.expanded == Some(Panel::Projection) {
+            for i in 0..4 {
+                self.targets.push((Hit::ProjectionMode(i), rect(left, y, right, y + 30.0 * s)));
+                y += 30.0 * s;
+            }
+            y += GAP * s;
         }
 
         let slider = |hit: Hit, y: &mut f32, targets: &mut Vec<_>, tracks: &mut Vec<_>| {
@@ -343,7 +381,7 @@ impl QuickSettingsView {
     fn toggle_panel(&mut self, panel: Panel) {
         self.expanded = accordion(self.expanded, panel);
         if self.expanded == Some(Panel::Wifi) && self.wifi.is_none() {
-            self.wifi = Some(WifiPanel::open(self.hwnd));
+            self.wifi = Some(WifiPanel::open(self.hwnd, self.status.portal));
         }
         if self.expanded == Some(Panel::Bluetooth) {
             self.bluetooth = Some(BluetoothPanel::open(self.hwnd, self.bluetooth_status.clone()));
@@ -361,6 +399,12 @@ impl View for QuickSettingsView {
     fn attach(&mut self, hwnd: HWND) {
         self.hwnd = hwnd;
         self.bluetooth_probe = Some(Probe::open(hwnd));
+        services::quick_controls::watch(Some(hwnd), TIMER_QUICK_STATE);
+        services::quick_controls::refresh_airplane();
+    }
+
+    fn destroy(&mut self) {
+        services::quick_controls::watch(None, 0);
     }
 
     fn window_corner_radius(&self) -> Option<f32> { Some(PANEL_RADIUS) }
@@ -391,6 +435,9 @@ impl View for QuickSettingsView {
         let status = services::status();
         if status == self.status && !wifi_changed && !bluetooth_changed && self.bluetooth_status == before_bluetooth {
             return false;
+        }
+        if let Some(wifi) = &mut self.wifi {
+            wifi.set_portal(status.portal);
         }
         if status.audio_devices != self.status.audio_devices {
             self.outputs = services::audio_outputs();
@@ -444,11 +491,14 @@ impl View for QuickSettingsView {
             match hit {
                 Hit::Network => {
                     fill(r, 16.0 * s, plate_color(hit));
-                    let (glyph, title, detail) = match &self.status.network {
+                    let (glyph, title, mut detail) = match &self.status.network {
                         NetState::Wifi { ssid, signal } => (glyphs::WIFI, "Wi-Fi", format!("{ssid} · {signal}%")),
                         NetState::Wired => (glyphs::ETHERNET, "Ethernet", "Connected".to_owned()),
                         NetState::Offline => (glyphs::WIFI, "Network", "Not connected".to_owned()),
                     };
+                    if self.status.portal == Portal::Detected {
+                        detail = "Sign-in required".to_owned();
+                    }
                     let badge = rect(r.left + 10.0 * s, r.top + 10.0 * s, r.left + 42.0 * s, r.bottom - 10.0 * s);
                     let online = self.status.network != NetState::Offline;
                     fill(badge, 16.0 * s, if online { theme.accent } else { theme.control });
@@ -484,6 +534,19 @@ impl View for QuickSettingsView {
                     text::draw(cx, glyphs::CHEVRON_UP, &icon, chevron, up);
                 }
                 Hit::Wifi(_) | Hit::BluetoothPanel(_) => {}
+                Hit::ProjectionMode(i) => {
+                    if self.hot == Some(hit) { fill(r, 8.0*s, theme.hover); }
+                    let labels = ["PC screen only", "Duplicate", "Extend", "Second screen only"];
+                    text::draw(cx, labels[i], &normal, rect(r.left + 10.0*s, r.top, r.right - 10.0*s, r.bottom), theme.text);
+                }
+                Hit::Projection | Hit::NightLight | Hit::EnergySaver | Hit::Airplane => {
+                    let (_, glyph, label) = QUICK_TILES.iter().find(|(h, _, _)| *h == hit).unwrap();
+                    let active = match hit { Hit::EnergySaver => self.energy_saver == Some(true), Hit::NightLight => self.night_light == Some(true), Hit::Airplane => self.airplane == Some(true), _ => false };
+                    fill(r, 10.0 * s, if active { theme.accent } else { plate_color(hit) });
+                    let color = if active { theme.on_accent } else { theme.text };
+                    text::draw(cx, glyph, &big_icon, rect(r.left, r.top + 5.0*s, r.right, r.top + 28.0*s), color);
+                    text::draw(cx, label, &small, rect(r.left + 2.0*s, r.top + 30.0*s, r.right - 2.0*s, r.bottom - 3.0*s), color);
+                }
                 Hit::Mute => {
                     let muted = self.status.volume.is_some_and(|v| v.muted);
                     fill(r, 15.0 * s, plate_color(hit));
@@ -610,7 +673,7 @@ impl View for QuickSettingsView {
         let info_top = self.targets.last().map_or(0.0, |(_, r)| r.bottom);
         let info = rect(0.0, info_top, cx.width, info_top + INFO_LINE * s);
         let color = if self.confirm.is_some() { theme.accent } else { theme.text_dim };
-        text::draw(cx, self.info_text(), &small, info, color);
+        text::draw(cx, if self.confirm.is_some() { self.info_text() } else { self.quick_message.as_deref().unwrap_or_else(|| self.info_text()) }, &small, info, color);
         unsafe { cx.dc.SetTransform(&transform); cx.dc.PopAxisAlignedClip(); }
         if self.content_height > self.height {
             let track = self.height - 16.0 * s;
@@ -673,6 +736,13 @@ impl View for QuickSettingsView {
                     Outcome::Nothing => return false,
                 }
             }
+            Some(Hit::Projection) => {
+                self.toggle_panel(Panel::Projection);
+            }
+            Some(Hit::ProjectionMode(i)) => { services::quick_controls::set_projection(i); self.quick_message = services::quick_controls::quick_message(); }
+            Some(Hit::NightLight) => { services::quick_controls::toggle_night_light(); self.quick_message = services::quick_controls::quick_message(); }
+            Some(Hit::EnergySaver) => { services::quick_controls::toggle_energy_saver(); self.quick_message = services::quick_controls::quick_message(); }
+            Some(Hit::Airplane) => { services::quick_controls::toggle_airplane(); self.quick_message = services::quick_controls::quick_message(); }
             Some(Hit::Wifi(hit)) => {
                 let outcome = self.wifi.as_mut().map_or(Outcome::Nothing, |w| w.click(hit));
                 self.layout();
@@ -766,6 +836,18 @@ impl View for QuickSettingsView {
     }
 
     fn timer(&mut self, id: usize) -> bool {
+        if id == TIMER_QUICK_STATE {
+            // Posted by a quick-controls worker when it finishes; not a repeating timer.
+            let quick_message = services::quick_controls::quick_message();
+            let message_changed = quick_message.is_some() && self.quick_message != quick_message;
+            if message_changed { self.quick_message = quick_message; }
+            let saver = services::quick_controls::energy_saver();
+            let night = services::quick_controls::night_light();
+            let airplane = services::quick_controls::airplane();
+            let changed = self.energy_saver != saver || self.night_light != night || self.airplane != airplane;
+            self.energy_saver = saver; self.night_light = night; self.airplane = airplane;
+            return changed || message_changed;
+        }
         if id == TIMER_PANEL_ANIMATE {
             let (next, wifi_done) = animate_panel(self.wifi_progress, self.expanded == Some(Panel::Wifi));
             self.wifi_progress = next;

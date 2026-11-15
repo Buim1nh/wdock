@@ -30,7 +30,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DeregisterShellHookWindow, DestroyWindow, DispatchMessageW,
     GetForegroundWindow, GetMessageW, KillTimer, MSG, PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE,
     PostMessageW, PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SetTimer,
-    TranslateMessage, WM_APP, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
+    TranslateMessage, EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, WM_APP, WM_CLIPBOARDUPDATE, WM_DESTROY,
+    WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{Result, w};
@@ -82,6 +83,10 @@ const TIMER_REBUILD: usize = 1;
 const TIMER_RECLAIM: usize = 3;
 const TIMER_POMODORO: usize = 4;
 const TIMER_APPBAR: usize = 5;
+const TIMER_PORTAL: usize = 6;
+/// A new connection can pass through portal-like states while Windows probes
+/// it, so a browser only opens if the portal is still there after this delay.
+const PORTAL_SETTLE_MS: u32 = 3000;
 /// Explorer applies a reservation asynchronously; check it this long after.
 const APPBAR_CHECK_MS: u32 = 1500;
 /// Some apps (Steam) ignore a TaskbarCreated that arrives soon after another
@@ -183,6 +188,8 @@ struct Shell {
     gfx: Option<Rc<Gfx>>,
     /// Every bar window with the monitor it sits on.
     bars: Vec<(HWND, HMONITOR)>,
+    /// Top-bar strips used to keep a foreground window from extending behind them.
+    topbar_strips: Vec<(RECT, i32)>,
     pending_device_lost: bool,
     /// The monitor whose bars are hidden under a full-screen app (game mode).
     fullscreen: Option<HMONITOR>,
@@ -243,7 +250,9 @@ impl Shell {
                         self.bars.push((hwnd, monitor.handle));
                         // Explorer keeps maximized windows below the top bar.
                         let height = (self.config.topbar.height * monitor.scale).round() as i32;
-                        appbar::register(hwnd, Edge::Top, RECT { bottom: m.top + height, ..m });
+                        let reserved = RECT { bottom: m.top + height, ..m };
+                        self.topbar_strips.push((reserved, m.bottom));
+                        appbar::register(hwnd, Edge::Top, reserved);
                     }
                     Err(err) => log::error!("failed to create top bar: {err}"),
                 }
@@ -280,6 +289,9 @@ impl Shell {
     fn update_fullscreen(&mut self) {
         let foreground = unsafe { GetForegroundWindow() };
         let monitor = wininfo::is_fullscreen_app(foreground).then(|| wininfo::monitor(foreground));
+        if monitor.is_none() {
+            self.keep_foreground_below_topbar(foreground);
+        }
         // Follow the foreground app's size changes, except in game mode: there
         // the location hook would wake us for every move inside the game, and
         // leaving full screen is announced by the shell hook and the AppBar
@@ -307,6 +319,27 @@ impl Shell {
         }
     }
 
+    fn keep_foreground_below_topbar(&self, foreground: HWND) {
+        if !wininfo::is_app_window(foreground) {
+            return;
+        }
+        let frame = wininfo::visible_rect(foreground);
+        let mut boundary = None::<i32>;
+        let mut monitor_bottom = None::<i32>;
+        for &(strip, screen_bottom) in &self.topbar_strips {
+            if frame.left >= strip.right || frame.right <= strip.left
+                || frame.top >= strip.bottom || frame.bottom <= strip.top {
+                continue;
+            }
+            boundary = Some(boundary.map_or(strip.bottom, |y| y.max(strip.bottom)));
+            monitor_bottom = Some(monitor_bottom.map_or(screen_bottom, |y| y.max(screen_bottom)));
+        }
+        if let (Some(top), Some(bottom)) = (boundary, monitor_bottom)
+            && wininfo::move_below_topbar(foreground, top, bottom) {
+                log::info!("moved foreground window below WDock's top bar");
+            }
+    }
+
     fn create_topbar(&self, gfx: &Rc<Gfx>, theme: &Rc<Theme>, monitor: &Monitor) -> Result<HWND> {
         let m = monitor.rect;
         let height = (self.config.topbar.height * monitor.scale).round() as i32;
@@ -322,6 +355,7 @@ impl Shell {
     }
 
     fn destroy_bars(&mut self) {
+        self.topbar_strips.clear();
         for (hwnd, _) in self.bars.drain(..) {
             appbar::unregister(hwnd);
             let _ = unsafe { DestroyWindow(hwnd) };
@@ -333,6 +367,13 @@ impl Shell {
             bar::notify_model_changed(hwnd);
         }
         popup::notify();
+    }
+
+    fn notify_foreground_bars(&self) {
+        for &(hwnd, _) in &self.bars {
+            bar::notify_foreground_changed(hwnd);
+        }
+        popup::notify_foreground_changed();
     }
 
     fn configure_clipboard(&self) {
@@ -435,6 +476,9 @@ pub fn run(mode: Mode) -> Result<()> {
     // taskbar to the top, and our tray must end up above it.
     explorer::hide_taskbar();
     services::start(hwnd);
+    if services::portal_due() {
+        unsafe { SetTimer(Some(hwnd), TIMER_PORTAL, PORTAL_SETTLE_MS, None) };
+    }
     apps_index::start(hwnd);
     if config.island.enabled {
         media::start(hwnd);
@@ -445,7 +489,7 @@ pub fn run(mode: Mode) -> Result<()> {
 
     SHELL.with_borrow_mut(|shell| {
         shell
-            .insert(Shell { config, model, gfx: None, bars: Vec::new(), pending_device_lost: false, fullscreen: None })
+            .insert(Shell { config, model, gfx: None, bars: Vec::new(), topbar_strips: Vec::new(), pending_device_lost: false, fullscreen: None })
             .rebuild();
     });
     // Register appbars while Explorer's real Shell_TrayWnd is still the
@@ -587,15 +631,35 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             let events = winevents::drain();
             let count = events.len();
             let moved = !events.is_empty();
-            enforce_hybrid();
+            let foreground_only = moved && events.iter().all(|(event, _)| *event == EVENT_SYSTEM_FOREGROUND);
+            let location_only = moved && events.iter().all(|(event, _)| *event == EVENT_OBJECT_LOCATIONCHANGE);
+            // A rapid Alt+Tab sequence is only a foreground change. Shell
+            // activation notifications already update full-screen state, so
+            // skip taskbar enumeration and the duplicate fullscreen scan here.
+            // Location changes arrive continuously while a window is being
+            // dragged. Wait for EVENT_SYSTEM_MOVESIZEEND before repositioning
+            // it so Windows snap previews and sizing remain in control.
+            if moved && !foreground_only && !location_only {
+                enforce_hybrid();
+            }
             with_shell(|shell| {
                 let windows_changed = shell.model.borrow_mut().apply(events);
-                shell.update_fullscreen();
-                let tray_changed = tray_host::with_tray(|tray| tray.prune()).unwrap_or(false);
+                if moved && !foreground_only && !location_only {
+                    shell.update_fullscreen();
+                }
+                let tray_changed = if foreground_only || location_only {
+                    false
+                } else {
+                    tray_host::with_tray(|tray| tray.prune()).unwrap_or(false)
+                };
                 // Any window event can change whether a window overlaps the
                 // dock (smart auto-hide), so bars always hear about it.
-                if windows_changed || tray_changed || moved {
-                    shell.notify_bars();
+                if windows_changed || tray_changed || (moved && !location_only) {
+                    if foreground_only {
+                        shell.notify_foreground_bars();
+                    } else {
+                        shell.notify_bars();
+                    }
                 }
             });
             if started.elapsed() > SLOW_EVENTS {
@@ -638,15 +702,18 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             if services::handle_message(wparam, lparam) {
                 with_shell(|shell| shell.notify_bars());
             }
+            if wparam.0 == services::KIND_NETWORK && services::portal_due() {
+                unsafe { SetTimer(Some(hwnd), TIMER_PORTAL, PORTAL_SETTLE_MS, None) };
+            }
             LRESULT(0)
         }
         WM_POWERBROADCAST => {
             if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC {
                 services::refresh_displays();
             }
-            if (wparam.0 as u32 == PBT_POWERSETTINGCHANGE || wparam.0 as u32 == PBT_APMPOWERSTATUSCHANGE)
-                && services::refresh_power()
-            {
+            let saver_changed = wparam.0 as u32 == PBT_POWERSETTINGCHANGE && services::power::power_setting_changed(lparam);
+            if saver_changed || ((wparam.0 as u32 == PBT_POWERSETTINGCHANGE || wparam.0 as u32 == PBT_APMPOWERSTATUSCHANGE)
+                && services::refresh_power()) {
                 with_shell(|shell| shell.notify_bars());
             }
             LRESULT(1)
@@ -705,6 +772,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             with_shell(|shell| idle = shell.fullscreen.is_none());
             if idle && appbar::verify() {
                 check_appbars_later();
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_PORTAL => {
+            let _ = unsafe { KillTimer(Some(hwnd), TIMER_PORTAL) };
+            // A browser must not take focus from a full-screen game; quick
+            // settings still offers the sign-in page.
+            if !popup::game_mode() {
+                services::open_portal();
             }
             LRESULT(0)
         }

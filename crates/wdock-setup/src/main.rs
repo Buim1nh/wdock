@@ -58,6 +58,8 @@ use windows::core::{HSTRING, PCWSTR, w};
 const WDOCK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wdock.exe"));
 const USAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/agent-usage-bar.exe"));
 const TEMPLATE: &str = include_str!("../../wdock/src/model/default_config.toml");
+const NIGHTLIGHT_LICENSE: &str = include_str!("../../../NIGHTLIGHT-LICENSE.txt");
+const KAWARP_LICENSE: &str = include_str!("../../../KAWARP-LICENSE.txt");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const TITLE: &str = "wdock setup";
 /// wdock's emergency-exit hotkey id: a clean quit that restores the taskbar.
@@ -280,6 +282,8 @@ fn install(options: &Options, progress: &dyn Fn(&str)) -> Result<String, String>
     progress("Copying files...");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     write_retrying(&exe, WDOCK)?;
+    std::fs::write(dir.join("NIGHTLIGHT-LICENSE.txt"), NIGHTLIGHT_LICENSE).map_err(|e| format!("Could not write Night Light license: {e}"))?;
+    std::fs::write(dir.join("KAWARP-LICENSE.txt"), KAWARP_LICENSE).map_err(|e| format!("Could not write Kawarp license: {e}"))?;
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     if !same_file(&me, &uninstaller) {
         std::fs::copy(&me, &uninstaller).map_err(|e| format!("Could not write {}: {e}", uninstaller.display()))?;

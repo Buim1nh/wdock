@@ -61,7 +61,8 @@ Tất cả ảnh có độ phân giải 1920×1080.
 
 - **Mạng:** dòng kết nối mở rộng ra thành danh sách các mạng Wi-Fi đang thấy.
   - Mỗi mạng có tên, vạch sóng, ổ khóa nếu có mật khẩu, và chữ "Connected" ở mạng đang dùng. Danh sách sắp theo độ mạnh sóng, có nút quét lại.
-  - Bấm vào mạng đã có profile lưu sẵn thì kết nối luôn. Với mạng mới, wdock không tự hỏi mật khẩu mà mở trang Wi-Fi của Windows.
+  - Bấm vào mạng đã có profile lưu sẵn thì kết nối luôn. Với mạng mới, wdock không tự hỏi mật khẩu mà mở flyout Wi-Fi của Windows để bạn chọn mạng và nhập mật khẩu ở đó.
+  - Khi Windows báo captive portal (mạng cần đăng nhập qua web), wdock mở trang đăng nhập bằng trình duyệt mặc định, mỗi kết nối một lần và không mở đè lên app toàn màn hình. Nút **Open sign-in page** trong danh sách dùng cho các portal mà Windows chỉ báo là local access.
   - Có công tắc bật/tắt Wi-Fi và nút ngắt kết nối. Máy không có Wi-Fi sẽ báo danh sách không khả dụng.
   - Chỉ quét mạng khi danh sách đang mở.
 - **Bluetooth:** dòng bên dưới Mạng mở danh sách thiết bị đã ghép đôi, ưu tiên thiết bị đang kết nối và hiện phần trăm pin khi Windows cung cấp. Máy không có radio Bluetooth sẽ ẩn dòng này.
@@ -71,6 +72,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
   - Bấm vào một thiết bị để đặt nó làm mặc định cho mọi vai trò; thanh âm lượng chuyển theo thiết bị mới.
   - Tính năng dùng interface chưa công bố `IPolicyConfig` như các công cụ đổi thiết bị khác. Nếu Windows từ chối, trang Sound settings sẽ mở ra thay thế.
 - **Micro và camera:** chỉnh mức thu, tắt/bật và chọn micro mặc định trong Quick Settings. Cửa sổ xem thử camera dùng cùng màu nền, phông chữ và nút bo góc của wdock; hỗ trợ bàn phím, báo lỗi ngay trong cửa sổ, chuyển camera và mở cài đặt camera Windows. Đóng cửa sổ để giải phóng camera; không thu hình nền.
+- **Nút nhanh:** Project (chỉ màn hình PC, nhân bản, mở rộng, chỉ màn hình thứ hai), Night light, Energy saver và chế độ máy bay. Mỗi thao tác chạy trên luồng phụ rồi báo lại; panel mở cũng không polling.
 - **Màn hình:** mỗi màn hình điều khiển được có một thanh độ sáng, ghi tên màn hình: màn hình laptop qua WMI, màn hình ngoài qua DDC/CI. Màn hình không hỗ trợ DDC/CI thì không hiện. Việc dò màn hình chạy ở luồng riêng khi khởi động, khi đổi màn hình và sau khi thức dậy (không bao giờ dò định kỳ); khi kéo thanh chỉ ghi tối đa một lần mỗi 100 ms, cộng giá trị cuối khi thả.
 - **Pin** và các nút khóa máy, ngủ, đăng xuất, khởi động lại, tắt máy, mở Settings. Các thao tác nguồn đều hỏi lại trước khi thực hiện.
 

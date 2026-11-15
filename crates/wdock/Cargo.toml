@@ -15,6 +15,7 @@ windows-future = "0.3"
 windows-collections = "0.3"
 windows-numerics = "0.3"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "display"] }
+win-nightlight-lib = "0.5.0"
 
 [dependencies.windows]
 workspace = true
@@ -23,6 +24,7 @@ features = [
     "Devices_Bluetooth",
     "Devices_Enumeration",
     "Devices_Radios",
+    "Win32_Devices_Bluetooth",
     "Foundation",
     "Web_Http",
     "Win32_Devices_Display",
