@@ -15,7 +15,7 @@ use crate::model::config::Backdrop;
 use crate::platform::launch;
 use crate::platform::session::{self, SessionAction};
 use crate::services::audio::{Output, OutputKind};
-use crate::services::{self, NetState, SystemStatus};
+use crate::services::{self, NetState, Portal, SystemStatus};
 use crate::ui::bar::{self, Button, PaintCx, View};
 use crate::ui::gfx::{rect, rounded};
 use crate::ui::glyphs;
@@ -291,6 +291,9 @@ impl View for QuickSettingsView {
         if status == self.status && !wifi_changed {
             return false;
         }
+        if let Some(wifi) = &mut self.wifi {
+            wifi.set_portal(status.portal);
+        }
         if status.audio_devices != self.status.audio_devices {
             self.outputs = services::audio_outputs();
             self.inputs = services::microphone_inputs();
@@ -336,11 +339,14 @@ impl View for QuickSettingsView {
             match hit {
                 Hit::Network => {
                     fill(r, 16.0 * s, plate_color(hit));
-                    let (glyph, title, detail) = match &self.status.network {
+                    let (glyph, title, mut detail) = match &self.status.network {
                         NetState::Wifi { ssid, signal } => (glyphs::WIFI, "Wi-Fi", format!("{ssid} · {signal}%")),
                         NetState::Wired => (glyphs::ETHERNET, "Ethernet", "Connected".to_owned()),
                         NetState::Offline => (glyphs::WIFI, "Network", "Not connected".to_owned()),
                     };
+                    if self.status.portal == Portal::Detected {
+                        detail = "Sign-in required".to_owned();
+                    }
                     let badge = rect(r.left + 10.0 * s, r.top + 10.0 * s, r.left + 42.0 * s, r.bottom - 10.0 * s);
                     let online = self.status.network != NetState::Offline;
                     fill(badge, 16.0 * s, if online { theme.accent } else { theme.control });
@@ -522,7 +528,7 @@ impl View for QuickSettingsView {
         match self.hit(x, y) {
             Some(Hit::Network) => {
                 self.wifi_open = !self.wifi_open;
-                if self.wifi_open && self.wifi.is_none() { self.wifi = Some(WifiPanel::open(self.hwnd)); }
+                if self.wifi_open && self.wifi.is_none() { self.wifi = Some(WifiPanel::open(self.hwnd, self.status.portal)); }
                 unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); }
                 self.hot = None;
                 self.layout();
