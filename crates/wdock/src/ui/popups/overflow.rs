@@ -124,6 +124,8 @@ impl View for OverflowView {
 
     fn deactivated(&mut self) -> bool {
         self.strip.mouse_leave();
-        true
+        // After a right-click the app takes the foreground to open its menu;
+        // the strip closes the popup once that menu had time to appear.
+        !self.strip.awaiting_menu()
     }
 }

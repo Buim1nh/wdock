@@ -103,9 +103,13 @@ impl TrayModel {
         }
     }
 
+    /// Lookup for queries such as Shell_NotifyIconGetRect. Unlike NIM_*
+    /// matching, an icon registered with a GUID is still found by its window
+    /// and uID, as explorer does: Electron asks for its bounds that way, and
+    /// without them some apps (ChatGPT) never open their tray menu.
     pub fn find_by(&self, hwnd: isize, uid: u32, guid: Option<[u8; 16]>) -> Option<&TrayIcon> {
-        let data = NotifyIconData { hwnd, uid, guid, ..Default::default() };
-        self.find(&data).map(|i| &self.icons[i])
+        guid.and_then(|g| self.icons.iter().find(|i| i.guid == Some(g)))
+            .or_else(|| self.icons.iter().find(|i| i.hwnd == hwnd && i.uid == uid))
     }
 
     pub fn apply(&mut self, message: TrayMessage) -> Applied {
@@ -534,6 +538,16 @@ mod tests {
         let id = tray.find_by(2, 8, None).unwrap().id;
         tray.set_icon_hidden(id, false);
         assert_eq!(tray.split(12, &[]).0.len(), 2, "explicitly shown icons remain on the bar");
+    }
+
+    #[test]
+    fn guid_icons_are_found_by_window_and_uid_for_queries() {
+        let mut tray = TrayModel::new(env());
+        let mut add = msg(TrayCommand::Add, 5, 3, NIF_GUID);
+        add.data.guid = Some([6; 16]);
+        assert!(tray.apply(add).ok);
+        assert_eq!(tray.find_by(5, 3, None).map(|i| i.uid), Some(3), "Electron asks by window and uID");
+        assert!(tray.find_by(5, 4, None).is_none());
     }
 
     #[test]

@@ -283,14 +283,15 @@ fn handle_tray(bytes: &[u8]) -> bool {
     ok
 }
 
-/// Shell_NotifyIconGetRect: one corner per call, packed like MAKELPARAM.
+/// Shell_NotifyIconGetRect: the top-left corner, then the size (shell32 adds
+/// it to the corner), each packed like MAKELPARAM.
 fn icon_rect(bytes: &[u8]) -> isize {
     let Some(query) = tray_proto::parse_icon_rect_query(bytes) else {
         return 0;
     };
     with_tray(|tray| {
         let rect = tray.find_by(query.hwnd, query.uid, query.guid)?.screen_rect?;
-        let (x, y) = if query.corner == 1 { (rect.left, rect.top) } else { (rect.right, rect.bottom) };
+        let (x, y) = if query.corner == 1 { (rect.left, rect.top) } else { (rect.right - rect.left, rect.bottom - rect.top) };
         Some(make_long(x, y))
     })
     .flatten()
@@ -347,9 +348,12 @@ pub fn send(icon_id: u64, input: TrayInput, anchor: POINT) {
         TrayInput::BalloonClick => &[NIN_BALLOONUSERCLICK],
     };
     let owner = HWND(owner as *mut _);
-    if matches!(input, TrayInput::LeftUp | TrayInput::RightUp | TrayInput::LeftDouble | TrayInput::BalloonClick) {
-        // The app usually calls SetForegroundWindow before showing its menu or window;
-        // we just received the user's input, so we may grant it that right.
+    if !matches!(input, TrayInput::MouseMove | TrayInput::PopupOpen | TrayInput::PopupClose
+        | TrayInput::BalloonShow | TrayInput::BalloonHide | TrayInput::BalloonTimeout) {
+        // The app calls SetForegroundWindow before showing its menu or window,
+        // and its menu closes at once without it. Electron apps open the menu
+        // on the button *down*, so grant the right before every press too:
+        // granting only on release raced the app and lost whenever it was quick.
         let _ = unsafe { AllowSetForegroundWindow(wininfo::process_id(owner)) };
     }
     for &message in messages {

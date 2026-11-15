@@ -21,6 +21,10 @@ use crate::ui::popup;
 
 pub const TIMER_TIP: usize = 50;
 const TIP_DELAY_MS: u32 = 450;
+/// Fires once after a right-click in the overflow popup, which closes then.
+const TIMER_MENU: usize = 51;
+/// Long enough for an app to show its own (possibly HTML) menu window.
+const MENU_WAIT_MS: u32 = 400;
 const DRAG_THRESHOLD: f32 = 5.0;
 pub const ICON_DIP: f32 = 16.0;
 
@@ -97,9 +101,17 @@ pub struct TrayStrip {
     dragging: bool,
     in_overflow: bool,
     bitmaps: HashMap<String, ID2D1Bitmap1>,
+    /// A right-click was forwarded from the overflow popup and its app may
+    /// still be opening its menu.
+    menu_pending: bool,
 }
 
 impl TrayStrip {
+    /// The overflow popup should stay while an app opens its menu.
+    pub fn awaiting_menu(&self) -> bool {
+        self.menu_pending
+    }
+
     pub fn set_overflow(&mut self, in_overflow: bool) {
         self.in_overflow = in_overflow;
     }
@@ -290,6 +302,13 @@ impl TrayStrip {
                 tray_host::send(id, TrayInput::LeftUp, self.anchor(id));
             } else {
                 tray_host::send(id, TrayInput::RightUp, self.anchor(id));
+                if self.in_overflow {
+                    // The app takes the foreground to open its menu. Closing the
+                    // popup right then hands the foreground to some other window,
+                    // and menus that hide on blur (ChatGPT's) vanish unseen.
+                    self.menu_pending = true;
+                    unsafe { SetTimer(Some(self.hwnd), TIMER_MENU, MENU_WAIT_MS, None) };
+                }
             }
         }
         true
@@ -309,6 +328,13 @@ impl TrayStrip {
 
     /// Hover delay elapsed: our tooltip, or the app's own popup for version-4 icons.
     pub fn timer(&mut self, id: usize) -> bool {
+        if id == TIMER_MENU {
+            unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_MENU); }
+            if std::mem::take(&mut self.menu_pending) {
+                bar::close(self.hwnd);
+            }
+            return false;
+        }
         if id != TIMER_TIP {
             return false;
         }
