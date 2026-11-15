@@ -65,6 +65,9 @@ Tất cả ảnh có độ phân giải 1920×1080.
   - Khi Windows báo captive portal (mạng cần đăng nhập qua web), wdock mở trang đăng nhập bằng trình duyệt mặc định, mỗi kết nối một lần và không mở đè lên app toàn màn hình. Nút **Open sign-in page** trong danh sách dùng cho các portal mà Windows chỉ báo là local access.
   - Có công tắc bật/tắt Wi-Fi và nút ngắt kết nối. Máy không có Wi-Fi sẽ báo danh sách không khả dụng.
   - Chỉ quét mạng khi danh sách đang mở.
+- **Bluetooth:** dòng bên dưới Mạng mở danh sách thiết bị đã ghép đôi, ưu tiên thiết bị đang kết nối và hiện phần trăm pin khi Windows cung cấp. Máy không có radio Bluetooth sẽ ẩn dòng này.
+  - Bật/tắt radio và kết nối hoặc ngắt thiết bị âm thanh đã ghép đôi. Thiết bị không được hỗ trợ, quyền truy cập bị từ chối hoặc lỗi driver sẽ mở cài đặt Bluetooth của Windows. Việc ghép đôi vẫn thực hiện trong Windows Settings; wdock không hỏi mã PIN.
+  - Wi-Fi và Bluetooth chỉ mở một panel tại một thời điểm. Việc dò Bluetooth và đăng ký sự kiện chỉ tồn tại khi panel đang mở; mỗi lần mở Quick Settings còn đọc một lần ở luồng nền để hiển thị dòng Bluetooth. Không dò định kỳ.
 - **Âm thanh:** thanh âm lượng và danh sách thiết bị phát đang hoạt động (loa, tai nghe, HDMI, Bluetooth).
   - Bấm vào một thiết bị để đặt nó làm mặc định cho mọi vai trò; thanh âm lượng chuyển theo thiết bị mới.
   - Tính năng dùng interface chưa công bố `IPolicyConfig` như các công cụ đổi thiết bị khác. Nếu Windows từ chối, trang Sound settings sẽ mở ra thay thế.
