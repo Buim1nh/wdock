@@ -86,15 +86,6 @@ pub fn switch(index: u8) {
         }
 }
 
-pub fn pin_window(hwnd: HWND) {
-    if state().is_some() {
-        let handle = windows058::Win32::Foundation::HWND(hwnd.0);
-        if let Err(err) = winvd::pin_window(handle) {
-            log::warn!("Could not show wdock window on every desktop: {err:?}");
-        }
-    }
-}
-
 pub fn move_window(hwnd: HWND, index: u8) -> bool {
     if !state().is_some_and(|state| index < state.count) {
         return false;

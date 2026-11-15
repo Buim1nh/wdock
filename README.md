@@ -81,7 +81,7 @@ All screenshots are 1920×1080.
 - Pinned and running apps, with a dot under running ones.
 - macOS-style magnification and name labels.
 - Live window previews on hover.
-- Drag to reorder or pin, and a right-click menu.
+- Drag to reorder or pin, and a right-click menu. **Force quit** ends the app and every process it started, for apps that keep running in the tray after their window closes.
 - Smart auto-hide: the dock slides away while a window overlaps it and comes back at the bottom edge.
 
 ### Dynamic Island
