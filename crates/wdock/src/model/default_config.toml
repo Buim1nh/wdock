@@ -5,6 +5,10 @@
 theme = "auto"
 # "acrylic" (blurred, translucent) or "solid".
 backdrop = "acrylic"
+# Font for wdock's text: "auto" uses SF Pro when installed, otherwise
+# Segoe UI Variable. Or name any installed family, e.g. "Inter" or "Segoe UI".
+# Only wdock changes; Windows' own fonts are left alone.
+font = "auto"
 
 [performance]
 # "software" renders on the CPU (WARP): ~10 MB, never wakes a discrete GPU.
@@ -58,10 +62,6 @@ pinned = [
 # Ctrl+Alt+Shift+Q quits wdock (explorer's taskbar returns). Everything else,
 # including the overview and workspaces, is on the top bar.
 
-[workspaces]
-# Legacy setting retained for compatibility; the bar uses Windows virtual desktops.
-count = 4
-
 [island]
 # A Dynamic Island-style pill at the top centre of every monitor: now playing
 # (any app that shows Windows' media controls), a Pomodoro timer and short
@@ -72,6 +72,9 @@ style = "island"
 notch_width = 200.0
 # Enable optional widgets and choose their tab order.
 file_shelf = true
+# Collect text only, in RAM (including pinned items). Off by default.
+# Capture stops during full-screen apps; disabling clears all history.
+clipboard_history = false
 widget_order = ["media", "files"]
 # Pomodoro lengths in minutes.
 pomodoro_work = 25

@@ -12,9 +12,9 @@ use windows::Win32::Media::Audio::Endpoints::{
 use windows::Win32::Media::Audio::{
     AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IMMDevice,
     IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator, eCommunications,
-    eConsole, eMultimedia, eRender,
+    eConsole, eMultimedia, eRender, eCapture,
 };
-use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, STGM_READ};
+use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, STGM_READ};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::core::{BSTR, GUID, HRESULT, IUnknown, IUnknown_Vtbl, PCWSTR, Result, implement};
 
@@ -28,23 +28,25 @@ fn post(target: isize, kind: usize) {
 /// held key, a knob) then costs one message and one read of the final value.
 pub static VOLUME_PENDING: AtomicBool = AtomicBool::new(false);
 
+pub static MIC_PENDING: AtomicBool = AtomicBool::new(false);
 #[implement(IAudioEndpointVolumeCallback)]
-struct VolumeCallback(isize);
+struct VolumeCallback(isize, bool);
 
 impl IAudioEndpointVolumeCallback_Impl for VolumeCallback_Impl {
     fn OnNotify(&self, data: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<()> {
         if let Some(data) = unsafe { data.as_ref() } {
             log::debug!("endpoint volume notify: level={:.3} muted={}", data.fMasterVolume, data.bMuted.as_bool());
         }
-        if !VOLUME_PENDING.swap(true, Ordering::AcqRel) {
-            post(self.0, KIND_AUDIO);
+        let pending = if self.1 { &MIC_PENDING } else { &VOLUME_PENDING };
+        if !pending.swap(true, Ordering::AcqRel) {
+            post(self.0, if self.1 { super::KIND_MIC } else { KIND_AUDIO });
         }
         Ok(())
     }
 }
 
 #[implement(IMMNotificationClient)]
-struct DeviceCallback(isize);
+struct DeviceCallback(isize, bool);
 
 impl IMMNotificationClient_Impl for DeviceCallback_Impl {
     fn OnDeviceStateChanged(&self, _id: &PCWSTR, _state: DEVICE_STATE) -> Result<()> {
@@ -60,8 +62,8 @@ impl IMMNotificationClient_Impl for DeviceCallback_Impl {
         Ok(())
     }
     fn OnDefaultDeviceChanged(&self, flow: EDataFlow, role: ERole, _id: &PCWSTR) -> Result<()> {
-        if flow == eRender && role == eConsole {
-            post(self.0, KIND_AUDIO_DEVICE);
+        if flow == (if self.1 { eCapture } else { eRender }) && role == eConsole {
+            post(self.0, if self.1 { super::KIND_MIC_DEVICE } else { KIND_AUDIO_DEVICE });
             post(self.0, KIND_AUDIO_LIST);
         }
         Ok(())
@@ -111,7 +113,12 @@ pub struct Output {
 }
 
 fn device_id(device: &IMMDevice) -> Option<String> {
-    unsafe { device.GetId().ok().and_then(|id| id.to_string().ok()) }
+    unsafe {
+        let id = device.GetId().ok()?;
+        let text = id.to_string().ok();
+        CoTaskMemFree(Some(id.0.cast()));
+        text
+    }
 }
 
 fn describe(device: &IMMDevice, default_id: Option<&str>) -> Option<Output> {
@@ -139,6 +146,7 @@ fn describe(device: &IMMDevice, default_id: Option<&str>) -> Option<Output> {
 
 pub struct Audio {
     target: isize,
+    capture: bool,
     enumerator: IMMDeviceEnumerator,
     device_callback: IMMNotificationClient,
     endpoint: Option<(IAudioEndpointVolume, IAudioEndpointVolumeCallback)>,
@@ -146,22 +154,30 @@ pub struct Audio {
 
 impl Audio {
     pub fn new(target: HWND) -> Result<Self> {
+        Self::with_flow(target, false)
+    }
+
+    pub fn microphone(target: HWND) -> Result<Self> { Self::with_flow(target, true) }
+
+    fn with_flow(target: HWND, capture: bool) -> Result<Self> {
         let target = target.0 as isize;
         let enumerator: IMMDeviceEnumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
-        let device_callback: IMMNotificationClient = DeviceCallback(target).into();
+        let device_callback: IMMNotificationClient = DeviceCallback(target, capture).into();
         unsafe { enumerator.RegisterEndpointNotificationCallback(&device_callback)? };
-        let mut audio = Self { target, enumerator, device_callback, endpoint: None };
+        let mut audio = Self { target, capture, enumerator, device_callback, endpoint: None };
         audio.attach_default();
         Ok(audio)
     }
+
+    fn flow(&self) -> EDataFlow { if self.capture { eCapture } else { eRender } }
 
     /// (Re)binds to the current default output device, e.g. after headphones are plugged in.
     pub fn attach_default(&mut self) {
         self.detach();
         let attached = unsafe {
-            self.enumerator.GetDefaultAudioEndpoint(eRender, eConsole).and_then(|device| {
+            self.enumerator.GetDefaultAudioEndpoint(self.flow(), eConsole).and_then(|device| {
                 let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
-                let callback: IAudioEndpointVolumeCallback = VolumeCallback(self.target).into();
+                let callback: IAudioEndpointVolumeCallback = VolumeCallback(self.target, self.capture).into();
                 endpoint.RegisterControlChangeNotify(&callback)?;
                 Ok((endpoint, callback))
             })
@@ -174,10 +190,10 @@ impl Audio {
 
     /// Active render endpoints, default first.
     pub fn outputs(&self) -> Vec<Output> {
-        let default_id = unsafe { self.enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok() }.and_then(|d| device_id(&d));
+        let default_id = unsafe { self.enumerator.GetDefaultAudioEndpoint(self.flow(), eConsole).ok() }.and_then(|d| device_id(&d));
         let mut list = Vec::new();
         unsafe {
-            if let Ok(devices) = self.enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
+            if let Ok(devices) = self.enumerator.EnumAudioEndpoints(self.flow(), DEVICE_STATE_ACTIVE)
                 && let Ok(count) = devices.GetCount()
             {
                 for i in 0..count {
@@ -221,7 +237,7 @@ impl Audio {
         if let Some((endpoint, _)) = &self.endpoint {
             unsafe {
                 let _ = endpoint.SetMasterVolumeLevelScalar(level.clamp(0.0, 1.0), std::ptr::null());
-                if level > 0.0 {
+                if level > 0.0 && !self.capture {
                     let _ = endpoint.SetMute(false, std::ptr::null());
                 }
             }
@@ -261,5 +277,16 @@ mod tests {
         }
         assert!(outputs.iter().filter(|o| o.default).count() <= 1);
         assert!(outputs.iter().all(|o| !o.name.is_empty() && !o.id.is_empty()));
+    }
+
+    #[test]
+    fn microphone_enumerates_only_capture_endpoints() {
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let Ok(mic) = Audio::microphone(HWND::default()) else { return; };
+        let inputs = mic.outputs();
+        assert!(inputs.iter().filter(|d| d.default).count() <= 1);
+        assert!(inputs.iter().all(|d| !d.name.is_empty() && !d.id.is_empty()));
+        let render_ids: Vec<_> = Audio::new(HWND::default()).map(|audio| audio.outputs().into_iter().map(|d| d.id).collect()).unwrap_or_default();
+        assert!(inputs.iter().all(|d| !render_ids.contains(&d.id)));
     }
 }

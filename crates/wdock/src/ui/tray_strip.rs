@@ -207,11 +207,9 @@ impl TrayStrip {
             if self.dragging {
                 let origin = bar::screen_rect(self.hwnd);
                 let (sx, sy) = (origin.left + x.round() as i32, origin.top + y.round() as i32);
-                if !self.in_overflow {
-                    if let Some((_, chevron)) = DROP_TARGETS.get() {
-                        if inside(chevron, sx, sy) { popup::open_overflow_for_drag(chevron, self.scale); }
-                    }
-                }
+                if !self.in_overflow
+                    && let Some((_, chevron)) = DROP_TARGETS.get()
+                        && inside(chevron, sx, sy) { popup::open_overflow_for_drag(chevron, self.scale); }
                 set_marker(marker_at(sx, sy));
                 return true;
             }

@@ -17,7 +17,6 @@ pub struct Config {
     pub topbar: TopBarConfig,
     pub tray: TrayConfig,
     pub dock: DockConfig,
-    pub workspaces: WorkspacesConfig,
     pub island: IslandConfig,
 }
 
@@ -26,6 +25,8 @@ pub struct Config {
 pub struct Appearance {
     pub theme: ThemeMode,
     pub backdrop: Backdrop,
+    /// UI font family; "auto" prefers SF Pro when installed, else Segoe UI Variable.
+    pub font: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -142,12 +143,6 @@ pub enum AutoHide {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
-pub struct WorkspacesConfig {
-    pub count: u8,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(default)]
 pub struct IslandConfig {
     pub enabled: bool,
     pub style: IslandStyle,
@@ -163,6 +158,8 @@ pub struct IslandConfig {
     pub animate_equalizer: bool,
     pub lyrics_background_motion: bool,
     pub file_shelf: bool,
+    /// Opt-in, memory-only text clipboard history.
+    pub clipboard_history: bool,
     pub widget_order: Vec<String>,
 }
 
@@ -189,7 +186,7 @@ pub enum DockWindows {
 
 impl Default for Appearance {
     fn default() -> Self {
-        Self { theme: ThemeMode::Auto, backdrop: Backdrop::Acrylic }
+        Self { theme: ThemeMode::Auto, backdrop: Backdrop::Acrylic, font: "auto".into() }
     }
 }
 
@@ -238,18 +235,12 @@ impl Default for DockConfig {
     }
 }
 
-impl Default for WorkspacesConfig {
-    fn default() -> Self {
-        Self { count: 4 }
-    }
-}
-
 impl Default for IslandConfig {
     fn default() -> Self {
         Self {
             enabled: true, style: IslandStyle::Island, notch_width: 200.0,
             pomodoro_work: 25, pomodoro_break: 5, notices: true, animate_equalizer: true,
-            file_shelf: true, lyrics_background_motion: true,
+            file_shelf: true, clipboard_history: false, lyrics_background_motion: true,
             widget_order: vec!["media".into(), "files".into()],
         }
     }

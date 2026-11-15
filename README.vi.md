@@ -5,12 +5,16 @@
 wdock là bộ top bar, dock và Dynamic Island kiểu macOS cho Windows 11, viết bằng Rust.
 
 - Mục tiêu tài nguyên: RAM dưới 25 MB, CPU gần 0% khi rảnh, 0% khi đang chơi game.
-- Không inject code vào tiến trình khác, không dùng keyboard hook, không tự gọi mạng, nên an toàn khi chạy cùng anti-cheat.
+- Không inject code vào tiến trình khác, không dùng keyboard hook, không tự gọi mạng (bridge lời bài hát tùy chọn chỉ lắng nghe trên `127.0.0.1`), nên an toàn khi chạy cùng anti-cheat.
 - Chạy song song với explorer chứ không thay thế nó. Các tính năng của Windows vẫn hoạt động, và thoát wdock thì taskbar bình thường quay lại.
 
 [![Video demo wdock](docs/media/demo.gif)](docs/media/demo.mp4)
 
 *Video demo gồm dock phóng to, launcher, icon khay, lịch và Quick Settings. Bấm vào để xem bản MP4 1080p.*
+
+[![Demo Bookmark và clipboard text](docs/media/bookmarks-clipboard.gif)](docs/media/bookmarks-clipboard.mp4)
+
+*Bookmark, nhóm file, tìm kiếm và clipboard text chỉ lưu trong RAM của wdock 0.6.0. Quay trực tiếp từ ứng dụng với dữ liệu mẫu; bấm để xem video 1080p.*
 
 ## Mục lục
 
@@ -37,8 +41,10 @@ Tất cả ảnh có độ phân giải 1920×1080.
 | Launcher (Win+Alt+Space) | |
 | ![Lịch](docs/media/calendar.png) | ![Quick Settings](docs/media/quick-settings.png) |
 | Lịch | Quick Settings đang mở danh sách Wi-Fi và thiết bị âm thanh |
-| ![Dynamic Island mở rộng](docs/media/island.png) | |
-| Dynamic Island mở rộng | |
+| ![Dynamic Island mở rộng, tab Files](docs/media/island.png) | |
+| Dynamic Island mở rộng, tab Files | |
+| ![Bookmark với file ghim và nhóm](docs/media/bookmarks.png) | ![Lịch sử clipboard text với mục ghim](docs/media/clipboard.png) |
+| Bookmark: tham chiếu, nhóm, tìm kiếm và ghim | Clipboard text: copy, ghim, tạm dừng và xóa |
 
 ## Tính năng
 
@@ -55,12 +61,15 @@ Tất cả ảnh có độ phân giải 1920×1080.
 
 - **Mạng:** dòng kết nối mở rộng ra thành danh sách các mạng Wi-Fi đang thấy.
   - Mỗi mạng có tên, vạch sóng, ổ khóa nếu có mật khẩu, và chữ "Connected" ở mạng đang dùng. Danh sách sắp theo độ mạnh sóng, có nút quét lại.
-  - Bấm vào mạng đã có profile lưu sẵn thì kết nối luôn. Với mạng mới, wdock không tự hỏi mật khẩu mà mở trang Wi-Fi của Windows.
+  - Bấm vào mạng đã có profile lưu sẵn thì kết nối luôn. Với mạng mới, wdock không tự hỏi mật khẩu mà mở flyout Wi-Fi của Windows để bạn chọn mạng và nhập mật khẩu ở đó.
+  - Khi Windows báo captive portal (mạng cần đăng nhập qua web), wdock mở trang đăng nhập bằng trình duyệt mặc định, mỗi kết nối một lần và không mở đè lên app toàn màn hình. Nút **Open sign-in page** trong danh sách dùng cho các portal mà Windows chỉ báo là local access.
   - Có công tắc bật/tắt Wi-Fi và nút ngắt kết nối. Máy không có Wi-Fi sẽ báo danh sách không khả dụng.
   - Chỉ quét mạng khi danh sách đang mở.
 - **Âm thanh:** thanh âm lượng và danh sách thiết bị phát đang hoạt động (loa, tai nghe, HDMI, Bluetooth).
   - Bấm vào một thiết bị để đặt nó làm mặc định cho mọi vai trò; thanh âm lượng chuyển theo thiết bị mới.
   - Tính năng dùng interface chưa công bố `IPolicyConfig` như các công cụ đổi thiết bị khác. Nếu Windows từ chối, trang Sound settings sẽ mở ra thay thế.
+- **Micro và camera:** chỉnh mức thu, tắt/bật và chọn micro mặc định trong Quick Settings. Cửa sổ xem thử camera dùng cùng màu nền, phông chữ và nút bo góc của wdock; hỗ trợ bàn phím, báo lỗi ngay trong cửa sổ, chuyển camera và mở cài đặt camera Windows. Đóng cửa sổ để giải phóng camera; không thu hình nền.
+- **Nút nhanh:** Project (chỉ màn hình PC, nhân bản, mở rộng, chỉ màn hình thứ hai), Night light, Energy saver và chế độ máy bay. Mỗi thao tác chạy trên luồng phụ rồi báo lại; panel mở cũng không polling.
 - **Màn hình:** mỗi màn hình điều khiển được có một thanh độ sáng, ghi tên màn hình: màn hình laptop qua WMI, màn hình ngoài qua DDC/CI. Màn hình không hỗ trợ DDC/CI thì không hiện. Việc dò màn hình chạy ở luồng riêng khi khởi động, khi đổi màn hình và sau khi thức dậy (không bao giờ dò định kỳ); khi kéo thanh chỉ ghi tối đa một lần mỗi 100 ms, cộng giá trị cuối khi thả.
 - **Pin** và các nút khóa máy, ngủ, đăng xuất, khởi động lại, tắt máy, mở Settings. Các thao tác nguồn đều hỏi lại trước khi thực hiện.
 
@@ -79,10 +88,18 @@ Viên thuốc ở giữa đỉnh mỗi màn hình, rê chuột vào thì mở r�
 - **Widget:** Island mở rộng có các tab Media và Files. Trong **wdock settings**, bật/tắt **Island file shelf** và đổi **Order (M/F)** để sắp xếp Media/Files. Pomodoro nằm trong Media.
 - **Kiểu và thao tác:** trong wdock settings, chọn **Island style** để chuyển giữa Island và Notch; dùng **Notch width** để chỉnh độ rộng khi thu gọn. Cuộn ngang trên bảng mở rộng để đổi tab. Cuộn lên trên hàng tab để thu gọn, cuộn xuống trên notch hoặc island thu gọn để mở lại. Cuộn dọc trong Files vẫn dùng để xem danh sách tệp.
 - **Files:** kéo file hoặc thư mục từ Explorer vào Island; kéo một mục ra ứng dụng tương thích, bấm để mở, hoặc bấm × để bỏ tham chiếu. Cuộn chuột để xem thêm. Khay lưu tối đa 32 đường dẫn, không sao chép nội dung; nếu file gốc bị xóa hoặc chuyển đi thì tham chiếu có thể không còn dùng được.
+
+- **Bookmark:** chọn **Manage bookmarks** trong Files, hoặc tìm **Bookmarks** bằng launcher (Win+Alt+Space). Thêm đường dẫn file/thư mục, tìm kiếm, ghim, chia nhóm, mở vị trí trong Explorer hoặc copy đường dẫn. Xóa bookmark chỉ bỏ tham chiếu; xóa nhóm đưa các mục về danh sách chưa phân nhóm. Các mục của khay Files cũ được nhập tự động.
+
+- **Clipboard text:** bật **Clipboard history (RAM)** trong wdock settings, rồi mở **Clipboard** từ Files hoặc tìm **Clipboard history** bằng launcher. Có tìm kiếm, copy, ghim, xóa, tạm dừng/tiếp tục thu thập và xóa các mục chưa ghim. Tính năng mặc định tắt; toàn bộ lịch sử, kể cả mục ghim, chỉ nằm trong RAM và mất khi thoát wdock hoặc tắt tính năng. Giới hạn 100 mục, mỗi mục tối đa 32 KiB text UTF-8 và tổng cộng 1 MiB. Không thu thập ảnh/file hay tự động paste. Việc thu thập dừng khi có app toàn màn hình ở phía trước; các thay đổi trong thời gian đó được bỏ qua. wdock tôn trọng format yêu cầu loại trừ khỏi lịch sử nếu ứng dụng nguồn cung cấp; cơ chế này không phát hiện được mọi nội dung bí mật.
 - **Đang phát:** dùng được với mọi app có điều khiển media của Windows (Spotify, trình duyệt, trình phát nhạc).
-Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
-Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
-Tab Lyrics nh?n l?i ?ang hi?n th? t? Spicy Lyrics ho?c Lyrics Plus qua bridge Spicetify tr?n m?y n?y.
+- **Lyrics:** lời bài hát đồng bộ cho Spotify. Cần companion Spicetify và đang mở Spicy Lyrics hoặc Lyrics Plus; bridge gửi lời đang hiển thị cho wdock qua loopback (`127.0.0.1:43179`, chỉ nhận từ client Spotify). Cài bằng:
+
+  ```bash
+  powershell -ExecutionPolicy Bypass -File extensions\spicetify\install.ps1
+  ```
+
+  Script cần Spicetify ở `%LOCALAPPDATA%\spicetify` và không ghi đè file lạ. Tắt nền chuyển động của lời bài hát bằng **Lyrics background motion** trong cài đặt wdock.
   - Tên bài, ca sĩ, play/pause, bài trước/sau và thanh tiến độ kéo tua được.
   - Hiện ảnh bìa nếu app cung cấp. Nhiều trang web không có ảnh bìa (trình duyệt chỉ chuyển tiếp những gì trang khai báo), khi đó island hiện biểu tượng app đang phát, và khi mở rộng thì hiện khung hình trực tiếp của cửa sổ đang phát.
   - Equalizer chuyển động khi đang phát. Bộ dựng hình của Windows (DWM) tự chạy hoạt ảnh này, nên wdock không tốn công cho từng khung hình.
@@ -194,14 +211,16 @@ Cần thoát wdock trước khi cài đè.
 | Win+Alt+Space | Launcher |
 | Ctrl+Alt+Shift+Q | Thoát wdock, trả lại taskbar của explorer |
 
-Nếu Win+Alt+Space đã bị app khác chiếm, wdock ghi vào log và launcher vẫn mở bằng nút trên top bar. Workspace và Overview dùng chuột.
+Nếu Win+Alt+Space đã bị app khác chiếm, wdock ghi vào log và launcher vẫn mở bằng nút trên top bar. Virtual desktop và Overview dùng chuột.
 
 ## Tùy chỉnh
 
 Thay đổi tùy chọn không cần chạy lại trình cài đặt. Bấm vào các icon trạng thái trên top bar, rồi chọn **Cài đặt wdock**. Panel này chỉnh được:
 
 - giao diện, nền (backdrop), top bar trên tất cả màn hình hoặc chỉ màn hình chính
-- tự ẩn dock, Dynamic Island, hiệu ứng equalizer và các widget của Island
+- font (kèm **Use font in Windows** / **Windows default font**)
+- tự ẩn dock, hiệu ứng hover (magnify hoặc glass), kích thước icon và kích thước khi hover
+- Dynamic Island bật/tắt, kiểu (Island hoặc Notch) và độ rộng notch, hiệu ứng equalizer, nền chuyển động của lời bài hát, kệ file và thứ tự tab; bật/tắt lịch sử clipboard text trong RAM
 - khởi động cùng Windows (một tác vụ theo người dùng tên `wdock`, cùng tác vụ mà trình cài đặt tạo)
 
 Mỗi thay đổi được lưu vào `config.toml` (giữ nguyên chú thích và các khóa khác) và áp dụng ngay. **Mở file cấu hình** mở file trong trình soạn thảo mặc định, để chỉnh các khóa khác.
@@ -217,13 +236,14 @@ File cấu hình là `%APPDATA%\wdock\config.toml`, được tạo tự động 
 
 | Mục | Thiết lập chính |
 |---|---|
-| `[appearance]` | `theme` = `"auto"`, `"dark"` hoặc `"light"`; `backdrop` = `"acrylic"` hoặc `"solid"` |
+| `[appearance]` | `theme` = `"auto"`, `"dark"` hoặc `"light"`; `backdrop` = `"acrylic"` hoặc `"solid"`; `font` = `"auto"` (SF Pro nếu đã cài, không thì Segoe UI Variable) hoặc tên bất kỳ font đã cài |
 | `[performance]` | `renderer` = `"software"` (WARP, khoảng 10 MB, không đánh thức GPU rời) hoặc `"gpu"` |
 | `[topbar]` | `height` (30), `monitors` (`"all"` hoặc `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible`: số icon trước nút tràn (12); `overflow`: các tên file chạy luôn bị đưa vào phần tràn |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` hoặc `"glass"`), `hover_size` tùy chọn, `magnification` cũ (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
-| `[workspaces]` | Thiết lập cũ; số desktop được lấy từ Windows. |
-| `[island]` | `enabled`, `file_shelf`, `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
+| `[island]` | `enabled`, `style` (`"island"` hoặc `"notch"`), `notch_width` (200), `lyrics_background_motion`, `file_shelf`, `clipboard_history` (false, chỉ text trong RAM), `widget_order`, `pomodoro_work`, `pomodoro_break`, `notices`, `animate_equalizer` |
+
+Để Windows cũng dùng font đó, mở wdock settings và bấm **Use font in Windows** (cần quyền admin; đăng xuất rồi đăng nhập lại để áp dụng). wdock thay các họ font Segoe UI và cài trước các file `.ttf`/`.otf` còn thiếu trong `%LOCALAPPDATA%\wdock\fonts`. **Windows default font** trả lại như cũ. SF Pro không được đóng gói sẵn vì Apple không cho phép phân phối lại; xem `fonts\README.md`.
 
 Khi chưa có danh sách ghim riêng, wdock nhập các app từ taskbar Windows theo thứ tự và sao chép shortcut vào thư mục dữ liệu của mình. Các thay đổi sau đó chỉ lưu vào `%LOCALAPPDATA%\wdock\pinned.txt`, không sửa taskbar Windows. Nếu nhập thất bại, wdock tạm dùng danh sách trong cấu hình và thử lại lần khởi động sau. Giao diện Windows dùng để nhập chưa được Microsoft công bố.
 
@@ -235,15 +255,16 @@ Dữ liệu và log nằm trong `%LOCALAPPDATA%\wdock\`:
 |---|---|
 | `logs\wdock.log`, `logs\wdock-guard.log` | log (xoay vòng khi vượt 2 MB) |
 | `pinned.txt` | app ghim, theo thứ tự trên dock |
-| `hidden.txt` | cửa sổ đang ở workspace khác |
 | `taskbar.txt` | trạng thái auto-hide gốc của explorer |
 | `tray-hidden.txt`, `tray-shown.txt` | lựa chọn vị trí icon khay trong wdock |
+| `bookmarks.toml` | tham chiếu file/thư mục, mục ghim và nhóm; giữ `island-files.txt` cũ làm bản dự phòng khi chuyển dữ liệu |
 
 ## Xử lý sự cố
 
 | Sự cố | Cách xử lý |
 |---|---|
 | Top bar đè lên cửa sổ maximize | wdock tự sửa trong vài giây (xem [Cách hoạt động](#cách-hoạt-động)). Lỗi xảy ra khi bộ quản lý AppBar của explorer bị kẹt, ví dụ sau khi wdock bị khởi động lại liên tục nhiều lần. Nếu vẫn còn, khởi động lại explorer trong Task Manager. |
+| wdock bị lag hoặc dock không hiện nữa | Gõ `reload` trong launcher (Win+Alt+Space) hoặc bấm nút đó ở cuối phần cài đặt của wdock. Nếu giao diện không phản hồi, chạy `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --reload`. Trạng thái lúc đó được ghi vào `wdock.log`. |
 | Taskbar của explorer không hiện lại sau khi wdock bị kill | Chạy `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --restore-taskbar`. |
 | Thiếu một icon khay | Khởi động lại app sở hữu icon đó. wdock yêu cầu các app thêm lại icon lúc khởi động và thêm một lần sau 5 giây. |
 | Island không có ảnh bìa khi xem video | Trang web không khai báo ảnh bìa. Island sẽ hiện biểu tượng app, và khi mở rộng thì hiện khung hình trực tiếp của cửa sổ. |
@@ -259,7 +280,7 @@ Script này:
 
 1. Gỡ scheduled task (và mục `Run` của các bản cài cũ).
 2. Dừng guard rồi dừng shell.
-3. Trả lại taskbar của explorer và các cửa sổ đang ẩn ở workspace khác.
+3. Trả lại taskbar của explorer (và các cửa sổ mà bản cũ còn để ẩn).
 
 `-RemoveFiles` xóa luôn file chạy, `-RemoveData` xóa log, cache và trạng thái. File cấu hình luôn được giữ lại.
 
@@ -279,6 +300,7 @@ Các chế độ dòng lệnh:
 | không có hoặc `--shell` | chạy shell |
 | `--guard` | supervisor lúc đăng nhập |
 | `--dev` | supervisor dev |
+| `--reload` | dựng lại shell đang chạy, hoặc khởi động lại nếu nó bị treo, rồi thoát |
 | `--restore-taskbar` | trả lại taskbar của explorer và các cửa sổ đang ẩn, rồi thoát |
 
 Mã nguồn nằm trong `crates/wdock/src`:
@@ -288,8 +310,10 @@ Mã nguồn nằm trong `crates/wdock/src`:
 | `app.rs` | vòng lặp message, hai phím tắt, game mode, kiểm tra AppBar |
 | `ui/` | các thanh Direct2D, dock, island, popup, lớp composition |
 | `platform/` | lớp bọc Win32, tray host, AppBar, sự kiện cửa sổ |
-| `services/` | âm thanh, mạng và Wi-Fi, nguồn, độ sáng, phiên media, chỉ mục app, icon |
-| `model/` | cấu hình, cửa sổ và workspace, khay, tìm kiếm, Pomodoro |
+| `services/` | âm thanh, mạng và Wi-Fi, nguồn, độ sáng, phiên media, bridge lời bài hát, chỉ mục app, icon |
+| `model/` | cấu hình, cửa sổ, khay, pin, tìm kiếm, Pomodoro, kệ file của Island |
+
+Ngoài crate: `crates/wdock-setup` (trình cài đặt), `extensions/` (bridge lời bài hát cho Spicetify và extension trình duyệt WDock Lyrics), `scripts/` (cài, gỡ, font Windows). Agent lập trình nên đọc [AGENTS.md](AGENTS.md) trước.
 
 ## Kết quả đo
 

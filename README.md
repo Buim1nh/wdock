@@ -5,12 +5,16 @@
 wdock is a macOS-style top bar, dock and Dynamic Island for Windows 11, written in Rust.
 
 - Resource targets: under 25 MB of RAM, close to 0% CPU when idle, and 0% while a game is running.
-- It injects no code into other processes, uses no keyboard hooks and makes no network calls, so it is safe next to anti-cheat software.
+- It injects no code into other processes, uses no keyboard hooks and makes no network calls (the optional lyrics bridge only listens on `127.0.0.1`), so it is safe next to anti-cheat software.
 - It runs on top of explorer instead of replacing it, so Windows features keep working and quitting wdock brings the normal taskbar back.
 
 [![wdock demo](docs/media/demo.gif)](docs/media/demo.mp4)
 
 *The demo shows the dock's magnification, the launcher, the tray icons, the calendar and quick settings. Click it for the 1080p MP4.*
+
+[![Bookmarks and clipboard text tour](docs/media/bookmarks-clipboard.gif)](docs/media/bookmarks-clipboard.mp4)
+
+*Bookmarks, file groups, search and memory-only clipboard text in wdock 0.6.0. Recorded from the running app with sample data; click for the 1080p video.*
 
 ## Contents
 
@@ -37,8 +41,10 @@ All screenshots are 1920×1080.
 | Launcher (Win+Alt+Space) | |
 | ![Calendar](docs/media/calendar.png) | ![Quick settings](docs/media/quick-settings.png) |
 | Calendar | Quick settings with the Wi-Fi and sound-output lists open |
-| ![Dynamic Island, expanded](docs/media/island.png) | |
-| Dynamic Island, expanded | |
+| ![Dynamic Island, expanded Files tab](docs/media/island.png) | |
+| Dynamic Island, expanded Files tab | |
+| ![Bookmarks with pinned files and groups](docs/media/bookmarks.png) | ![Clipboard text history with a pinned entry](docs/media/clipboard.png) |
+| Bookmarks: references, groups, search and pinning | Clipboard text: copy, pin, pause and clear |
 
 ## Features
 
@@ -55,12 +61,15 @@ All screenshots are 1920×1080.
 
 - **Network:** the connection row expands into the visible Wi-Fi networks.
   - Each network shows its name, signal bars, a lock if it is secured, and "Connected" for the current one, sorted by signal. A button rescans.
-  - Clicking a network that has a saved profile connects to it. For a new network wdock never asks for a password itself; it opens Windows' Wi-Fi settings instead.
+  - Clicking a network that has a saved profile connects to it. For a new network wdock never asks for a password itself; it opens Windows' own Wi-Fi flyout, where you pick the network and type the password.
+  - When Windows reports a captive portal (a network that needs web sign-in), wdock opens the sign-in page in your default browser, once per connection and never over a full-screen app. An **Open sign-in page** button in the list covers portals Windows only reports as local access.
   - A Wi-Fi on/off switch and a Disconnect action. Machines without Wi-Fi show the list as unavailable.
   - Networks are scanned only while the list is open.
 - **Sound:** a volume slider, plus a list of the active outputs (speakers, headphones, HDMI, Bluetooth).
   - Clicking an output makes it the default for every role, and the slider follows it.
   - This uses the undocumented `IPolicyConfig` interface, as other output switchers do. If Windows refuses, the Sound settings page opens instead.
+- **Microphone and camera:** adjust input level, mute/unmute and select the default microphone in Quick Settings. Camera preview uses wdock's theme, font and rounded controls, with keyboard navigation, an inline error state, a next-camera button and Windows camera settings. Closing the preview releases the camera; no capture runs in the background.
+- **Quick toggles:** Project (PC screen only, duplicate, extend, second screen only), Night light, Energy saver and Airplane mode. Each change runs on a worker and reports back; nothing polls while the panel is open.
 - **Display:** one brightness slider per screen that can be controlled, named after the monitor: the laptop panel through WMI, external monitors through DDC/CI. Monitors without DDC/CI show nothing. Screens are detected at start, on display changes and after resume (never polled), on a worker thread; dragging sends at most one write per 100 ms plus the final value.
 - **Battery** state, and buttons to lock, sleep, sign out, restart, shut down and open Settings. Power actions ask for confirmation.
 
@@ -74,17 +83,25 @@ All screenshots are 1920×1080.
 
 ### Dynamic Island
 
+A pill at the top centre of each monitor that expands on hover.
+
 The expanded Island has Media and Files tabs. In wdock settings, enable or disable **Island file shelf** and use **Order (M/F)** to change their order. Media includes the Pomodoro controls.
 
-Lyrics requires the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view. The bridge sends displayed lyrics to WDock over loopback.
+- **Lyrics:** synced lyrics for Spotify, shown in the expanded Island. This needs the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view; the bridge sends the displayed lyrics to wdock over loopback (`127.0.0.1:43179`, accepted only from the Spotify client). Install it with:
 
-Lyrics requires the Spicetify companion and an active Spicy Lyrics or Lyrics Plus view. The bridge sends displayed lyrics to WDock over loopback.
+  ```bash
+  powershell -ExecutionPolicy Bypass -File extensions\spicetify\install.ps1
+  ```
+
+  The script needs Spicetify in `%LOCALAPPDATA%\spicetify` and refuses to overwrite an unrecognized file. **Lyrics background motion** in wdock settings turns the animated background off.
 
 Choose **Island style** in wdock settings for a floating Island or a top-edge Notch; **Notch width** adjusts its compact width. Scroll horizontally over the expanded panel to switch tabs. Scroll up over the tab row to collapse it, then scroll down over the compact shape to reopen it. Vertical scrolling over Files still scrolls the file list.
 
 - **Files:** drag files or folders from Explorer onto the Island, then drag an entry out to a compatible app, click it to open, or use × to remove its reference. Scroll the list if needed. The shelf stores up to 32 paths, not file contents; moving or deleting the original can make a reference unavailable.
 
-A pill at the top centre of each monitor that expands on hover.
+- **Bookmarks:** choose **Manage bookmarks** in Files, or search for **Bookmarks** in the launcher (Win+Alt+Space). Add file or folder paths, search, pin, organize into groups, open their location in Explorer or copy their path. Removing a bookmark only removes the reference; deleting a group keeps its items ungrouped. Existing file-shelf entries are imported automatically.
+
+- **Clipboard text:** turn on **Clipboard history (RAM)** in wdock settings, then open **Clipboard** from Files or search for **Clipboard history** in the launcher. Search, copy, pin, remove, pause/resume capture and clear unpinned items. History is off by default and stays in memory, including pinned items: quitting wdock or disabling history clears it. Limits are 100 entries, 32 KiB of UTF-8 text per entry and 1 MiB total. No images, files or automatic pasting are captured. Capture stops while a full-screen app is in front; changes during that time are skipped. Clipboard formats that request exclusion from history are respected when supplied by the source app; this does not detect every secret.
 
 - **Now playing**, for any app that shows Windows' media controls (Spotify, browsers, media players):
   - Title, artist, play/pause, previous/next and a seekable progress bar.
@@ -198,19 +215,20 @@ Quit wdock before installing over a running copy.
 | Win+Alt+Space | Launcher |
 | Ctrl+Alt+Shift+Q | Quit wdock and bring explorer's taskbar back |
 
-If another app already owns Win+Alt+Space, wdock logs it and the launcher stays on the top bar button. Workspaces and the overview are reached with the mouse.
+If another app already owns Win+Alt+Space, wdock logs it and the launcher stays on the top bar button. Virtual desktops and the overview are reached with the mouse.
 
 ## Settings
 
 Changing options does not need the setup again. Click the status icons in the top bar, then **wdock settings**. The panel changes:
 
-- theme, backdrop, top bar on all monitors or only the primary one
-- dock auto-hide, Dynamic Island, animated equalizer
+- theme, backdrop, font (and **Use font in Windows** / **Windows default font**), top bar on all monitors or only the primary one
+- dock auto-hide, hover effect (magnify or glass), icon size and hover size
+- Dynamic Island on/off, style (Island or Notch) and notch width, animated equalizer, lyrics background motion, file shelf and tab order; opt-in text clipboard history in RAM
 - start at sign-in (a per-user scheduled task named `wdock`, the same one the setup creates)
 
 Each change is saved to `config.toml` (comments and other keys are kept) and applies at once. **Open config file** opens the file in your default editor for the other keys.
 
-Keys that are not in the panel (for example `[dock] icon_size`) still need a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
+Keys that are not in the panel (for example `[topbar] height`) still need a restart: press Ctrl+Alt+Shift+Q, then run `Start-ScheduledTask wdock` in PowerShell, or sign out and back in.
 
 ## Configuration
 
@@ -221,13 +239,14 @@ The configuration file is `%APPDATA%\wdock\config.toml`. wdock creates it from a
 
 | Section | Main settings |
 |---|---|
-| `[appearance]` | `theme` = `"auto"`, `"dark"` or `"light"`; `backdrop` = `"acrylic"` or `"solid"` |
+| `[appearance]` | `theme` = `"auto"`, `"dark"` or `"light"`; `backdrop` = `"acrylic"` or `"solid"`; `font` = `"auto"` (SF Pro when installed, else Segoe UI Variable) or any installed family |
 | `[performance]` | `renderer` = `"software"` (WARP, about 10 MB, never wakes a discrete GPU) or `"gpu"` |
 | `[topbar]` | `height` (30), `monitors` (`"all"` or `"primary"`), `date_format`, `time_format` |
 | `[tray]` | `max_visible` icons before the overflow chevron (12), `overflow` executable fragments always hidden |
 | `[dock]` | `icon_size` (32), `hover_effect` (`"magnify"` or `"glass"`), optional `hover_size`, legacy `magnification` (2.0), `monitors`, `windows`, `auto_hide`, `pinned` |
-| `[workspaces]` | Legacy setting; desktop count comes from Windows. |
-| `[island]` | `enabled` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
+| `[island]` | `enabled` (true), `style` (`"island"` or `"notch"`), `notch_width` (200), `file_shelf` (true), `clipboard_history` (false, memory-only text), `widget_order` (`["media", "files"]`), `lyrics_background_motion` (true), `pomodoro_work` (25), `pomodoro_break` (5), `notices` (true), `animate_equalizer` (true) |
+
+To use the font in Windows itself, open wdock settings and click **Use font in Windows** (asks for administrator rights; sign out and back in to apply). It substitutes the Segoe UI families and installs missing `.ttf`/`.otf` files from `%LOCALAPPDATA%\wdock\fonts` first. **Windows default font** undoes it. SF Pro is not bundled because Apple does not allow redistribution; see `fonts\README.md`.
 
 When no wdock pin list exists, wdock imports Windows taskbar pins in order and copies their shortcuts to its own data directory. Subsequent changes are saved only to `%LOCALAPPDATA%\wdock\pinned.txt`; they do not change Windows taskbar pins. If import fails, the configuration list is used temporarily and import is retried at the next start. The Windows interface used for the import is undocumented.
 
@@ -238,7 +257,7 @@ State and logs live in `%LOCALAPPDATA%\wdock\`:
 | `logs\wdock.log`, `logs\wdock-guard.log` | logs (rotated at 2 MB) |
 | `pinned.txt` | pinned apps, in dock order |
 | `tray-hidden.txt`, `tray-shown.txt` | explicit tray icon placement choices |
-| `hidden.txt` | windows parked in other workspaces |
+| `bookmarks.toml` | file/folder references, pins and groups; the old `island-files.txt` is kept as a migration backup |
 | `taskbar.txt` | explorer's original auto-hide state |
 
 ## Troubleshooting
@@ -247,6 +266,7 @@ State and logs live in `%LOCALAPPDATA%\wdock\`:
 |---|---|
 | The top bar covers maximized windows | wdock repairs this itself within a few seconds (see [How it works](#how-it-works)). It happens when explorer's AppBar manager gets stuck, for example after wdock was restarted many times in a row. If it persists, restart explorer from Task Manager. |
 | Explorer's taskbar did not come back after wdock was killed | Run `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --restore-taskbar`. |
+| wdock lags, or the dock stops appearing | Type `reload` in the launcher (Win+Alt+Space) or click it at the end of wdock's settings. If the UI does not respond, run `"%LOCALAPPDATA%\Programs\wdock\wdock.exe" --reload`. The state at that moment goes to `wdock.log`. |
 | A tray icon is missing | Restart the app that owns it. wdock asks apps to re-add their icons at start and again after 5 seconds. |
 | The island shows no cover for a video | The page declares no artwork. The island shows the app's icon instead, and a live view of the window when expanded. |
 | wdock does not start at sign-in | Check that the `wdock` task exists in Task Scheduler, or run `scripts\install.ps1 -NoBuild` again. |
@@ -261,7 +281,7 @@ The script:
 
 1. Removes the sign-in task (and the `Run` key entry left by older installs).
 2. Stops the guard, then the shell.
-3. Restores explorer's taskbar and any windows parked in other workspaces.
+3. Restores explorer's taskbar (and any windows an older version left hidden).
 
 `-RemoveFiles` also deletes the installed binary, and `-RemoveData` also deletes logs, caches and state. Your configuration is kept either way.
 
@@ -281,6 +301,7 @@ Command-line modes:
 | none or `--shell` | the shell |
 | `--guard` | the sign-in supervisor |
 | `--dev` | the development supervisor |
+| `--reload` | rebuild the running shell, or restart it if it is hung, then exit |
 | `--restore-taskbar` | restore explorer's taskbar and hidden windows, then exit |
 
 The source is in `crates/wdock/src`:
@@ -290,8 +311,10 @@ The source is in `crates/wdock/src`:
 | `app.rs` | message loop, the two hotkeys, game mode, AppBar checks |
 | `ui/` | Direct2D bars, the dock, the island, popups, composition layers |
 | `platform/` | Win32 wrappers, the tray host, AppBars, window events |
-| `services/` | audio, network and Wi-Fi, power, brightness, media session, app index, icons |
-| `model/` | configuration, windows and workspaces, tray, search, Pomodoro |
+| `services/` | audio, network and Wi-Fi, power, brightness, media session, lyrics bridge, app index, icons |
+| `model/` | configuration, windows, tray, pins, search, Pomodoro, island file shelf |
+
+Outside the crate: `crates/wdock-setup` (installer), `extensions/` (Spicetify lyrics bridge and the WDock Lyrics browser extension), `scripts/` (install, uninstall, Windows font). Coding agents should read [AGENTS.md](AGENTS.md) first.
 
 ## Measurements
 

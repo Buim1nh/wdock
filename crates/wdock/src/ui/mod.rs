@@ -1,4 +1,5 @@
 pub mod backdrop;
+pub mod camera_chrome;
 pub mod battery;
 pub mod bar;
 pub mod dock;

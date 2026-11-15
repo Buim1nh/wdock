@@ -27,6 +27,8 @@ pub const KIND_AUDIO_DEVICE: usize = 2;
 pub const KIND_NETWORK: usize = 3;
 pub const KIND_BRIGHTNESS: usize = 4;
 pub const KIND_AUDIO_LIST: usize = 5;
+pub const KIND_MIC: usize = 6;
+pub const KIND_MIC_DEVICE: usize = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Volume {
@@ -47,6 +49,17 @@ pub enum NetState {
     },
 }
 
+/// Whether the connected network holds the internet behind a sign-in page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Portal {
+    #[default]
+    None,
+    /// Wi-Fi with local access only: it may be a portal Windows did not identify.
+    Possible,
+    /// Windows reports captive-portal connectivity.
+    Detected,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Battery {
     pub percent: u8,
@@ -57,7 +70,9 @@ pub struct Battery {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SystemStatus {
     pub volume: Option<Volume>,
+    pub microphone: Option<Volume>,
     pub network: NetState,
+    pub portal: Portal,
     pub battery: Option<Battery>,
     /// Built-in panel level; `None` until known, or without software control.
     pub brightness: Option<u8>,
@@ -72,10 +87,23 @@ pub struct SystemStatus {
 
 struct Services {
     audio: Option<audio::Audio>,
+    microphone: Option<audio::Audio>,
     network: network::Network,
     _power: power::Power,
     brightness: brightness::Brightness,
     status: SystemStatus,
+    /// The connection whose sign-in page was already opened, so a portal that
+    /// flaps while the user signs in does not open it again.
+    portal_opened: Option<String>,
+}
+
+/// Identity of a connection; signal strength does not change it.
+fn connection_id(state: &NetState) -> Option<&str> {
+    match state {
+        NetState::Offline => None,
+        NetState::Wired => Some(""),
+        NetState::Wifi { ssid, .. } => Some(ssid),
+    }
 }
 
 thread_local! {
@@ -85,11 +113,14 @@ thread_local! {
 /// Starts all services; notifications go to `target` (the main window).
 pub fn start(target: HWND) {
     let audio = audio::Audio::new(target).inspect_err(|err| log::warn!("audio unavailable: {err}")).ok();
+    let microphone = audio::Audio::microphone(target).inspect_err(|err| log::warn!("microphone unavailable: {err}")).ok();
     let network = network::Network::new(target);
     let services = Services {
         status: SystemStatus {
             volume: audio.as_ref().and_then(audio::Audio::state),
+            microphone: microphone.as_ref().and_then(audio::Audio::state),
             network: network.state(),
+            portal: network.portal(),
             battery: power::battery(),
             brightness: None,
             displays: Vec::new(),
@@ -97,9 +128,11 @@ pub fn start(target: HWND) {
             audio_devices: 0,
         },
         audio,
+        microphone,
         network,
         _power: power::Power::register(target),
         brightness: brightness::Brightness::start(target),
+        portal_opened: None,
     };
     log::info!("status: {:?}", services.status);
     SERVICES.set(Some(services));
@@ -134,6 +167,8 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
             // listen on may be gone (a USB or Bluetooth device that reconnected
             // keeps its id but not its registration), so rebind and re-read.
             KIND_AUDIO_LIST => {
+                if let Some(mic) = &mut s.microphone { mic.attach_default(); }
+                s.status.microphone = s.microphone.as_ref().and_then(audio::Audio::state);
                 s.status.audio_devices = s.status.audio_devices.wrapping_add(1);
                 if let Some(audio) = &mut s.audio {
                     audio.attach_default();
@@ -150,7 +185,22 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
                     s.status.volume = audio.state();
                 }
             }
-            KIND_NETWORK => s.status.network = s.network.state(),
+            KIND_MIC_DEVICE => {
+                if let Some(mic) = &mut s.microphone { mic.attach_default(); }
+                s.status.microphone = s.microphone.as_ref().and_then(audio::Audio::state);
+                s.status.audio_devices = s.status.audio_devices.wrapping_add(1);
+            }
+            KIND_MIC => {
+                audio::MIC_PENDING.store(false, std::sync::atomic::Ordering::Release);
+                s.status.microphone = s.microphone.as_ref().and_then(audio::Audio::state);
+            }
+            KIND_NETWORK => {
+                s.status.network = s.network.state();
+                s.status.portal = s.network.portal();
+                if s.portal_opened.as_deref() != connection_id(&s.status.network) {
+                    s.portal_opened = None;
+                }
+            }
             KIND_BRIGHTNESS => {
                 s.status.displays = brightness::displays();
                 s.status.brightness =
@@ -161,6 +211,22 @@ pub fn handle_message(wparam: WPARAM, lparam: LPARAM) -> bool {
         s.status != before
     })
     .unwrap_or(false)
+}
+
+/// Whether a detected portal still waits for its sign-in page to be opened.
+pub fn portal_due() -> bool {
+    with(|s| s.status.portal == Portal::Detected && s.portal_opened.is_none()).unwrap_or(false)
+}
+
+/// Opens the sign-in page, once per connection.
+pub fn open_portal() {
+    with(|s| {
+        if s.status.portal == Portal::Detected && s.portal_opened.is_none() {
+            s.portal_opened = connection_id(&s.status.network).map(str::to_owned);
+            log::info!("captive portal on {:?}: opening the sign-in page", s.status.network);
+            crate::platform::launch::open(network::SIGN_IN_PAGE);
+        }
+    });
 }
 
 /// Handles WM_POWERBROADCAST.
@@ -236,4 +302,20 @@ pub fn set_brightness(id: u32, percent: u8, last: bool) {
 /// Looks for displays again (display change, resume). Runs on the worker.
 pub fn refresh_displays() {
     with(|s| s.brightness.detect());
+}
+
+pub fn microphone_inputs() -> Vec<audio::Output> {
+    with(|s| s.microphone.as_ref().map(audio::Audio::outputs)).flatten().unwrap_or_default()
+}
+pub fn set_default_microphone(id: &str) {
+    if let Some(Err(err)) = with(|s| s.microphone.as_ref().map(|a| a.set_default_output(id))).flatten() {
+        log::warn!("cannot switch microphone: {err}");
+        crate::platform::launch::open("ms-settings:sound");
+    }
+}
+pub fn set_microphone_level(level: f32) {
+    with(|s| { if let Some(mic) = &s.microphone { mic.set_level(level); } });
+}
+pub fn set_microphone_muted(muted: bool) {
+    with(|s| { if let Some(mic) = &s.microphone { mic.set_muted(muted); } });
 }

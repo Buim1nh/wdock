@@ -80,11 +80,10 @@ pub fn start(target: HWND) {
 }
 
 pub fn switch(index: u8) {
-    if state().is_some_and(|state| index < state.count) {
-        if let Err(err) = winvd::switch_desktop(u32::from(index)) {
+    if state().is_some_and(|state| index < state.count)
+        && let Err(err) = winvd::switch_desktop(u32::from(index)) {
             log::warn!("Could not switch Windows desktop: {err:?}");
         }
-    }
 }
 
 pub fn pin_window(hwnd: HWND) {

@@ -32,6 +32,9 @@ thread_local! { static SETTINGS_SCROLL: Cell<f32> = const { Cell::new(0.0) }; }
 enum Setting {
     Theme,
     Backdrop,
+    Font,
+    WindowsFont,
+    WindowsFontRestore,
     TopBars,
     AutoHide,
     DockHover,
@@ -43,14 +46,19 @@ enum Setting {
     Equalizer,
     LyricsMotion,
     IslandFiles,
+    ClipboardHistory,
     IslandOrder,
     SignIn,
     OpenFile,
+    Reload,
 }
 
-const ROWS: [(Setting, &str); 16] = [
+const ROWS: [(Setting, &str); 21] = [
     (Setting::Theme, "Theme"),
     (Setting::Backdrop, "Backdrop"),
+    (Setting::Font, "Font"),
+    (Setting::WindowsFont, "Use font in Windows"),
+    (Setting::WindowsFontRestore, "Windows default font"),
     (Setting::TopBars, "Top bar on"),
     (Setting::AutoHide, "Dock auto-hide"),
     (Setting::DockHover, "Dock hover"),
@@ -62,10 +70,42 @@ const ROWS: [(Setting, &str); 16] = [
     (Setting::Equalizer, "Animated equalizer"),
     (Setting::LyricsMotion, "Lyrics background motion"),
     (Setting::IslandFiles, "Island file shelf"),
+    (Setting::ClipboardHistory, "Clipboard history (RAM)"),
     (Setting::IslandOrder, "Order (M/F)"),
     (Setting::SignIn, "Start at sign-in"),
     (Setting::OpenFile, "Open config file"),
+    (Setting::Reload, "Reload wdock"),
 ];
+
+const WINDOWS_FONT_SCRIPT: &str = include_str!("../../../../../scripts/windows-font.ps1");
+
+/// Folder `windows-font.ps1` installs missing fonts from (install.ps1 fills it).
+pub fn font_dir() -> std::path::PathBuf {
+    crate::paths::local_dir().join("fonts")
+}
+
+fn windows_font_arguments(config: &Config, restore: bool) -> String {
+    if restore {
+        return "-Restore".into();
+    }
+    let family = config.appearance.font.trim();
+    let family = if family.is_empty() { "auto" } else { family };
+    format!("-Family {} -FontDir {}", launch::powershell_quote(family),
+        launch::powershell_quote(&font_dir().display().to_string()))
+}
+
+/// The next installed family in the settings cycle after `current`.
+fn next_font(current: &str) -> &'static str {
+    use windows::Win32::Graphics::DirectWrite::{DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory};
+    let choices = text::FONT_CHOICES;
+    let installed = |name: &str| {
+        name == "auto"
+            || unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) }
+                .is_ok_and(|dwrite| text::font_installed(&dwrite, name))
+    };
+    let start = choices.iter().position(|c| c.eq_ignore_ascii_case(current.trim())).map_or(0, |i| i + 1);
+    (0..choices.len()).map(|i| choices[(start + i) % choices.len()]).find(|c| installed(c)).unwrap_or("auto")
+}
 
 impl Setting {
     /// What the row shows for the current values.
@@ -80,6 +120,13 @@ impl Setting {
                 Backdrop::Acrylic => "Acrylic",
                 Backdrop::Solid => "Solid",
             },
+            Self::Font => return if config.appearance.font.trim().eq_ignore_ascii_case("auto") {
+                "Auto".to_owned()
+            } else {
+                config.appearance.font.trim().to_owned()
+            },
+            Self::WindowsFont => "Apply (admin)",
+            Self::WindowsFontRestore => "Restore (admin)",
             Self::TopBars => match config.topbar.monitors {
                 MonitorScope::All => "All monitors",
                 MonitorScope::Primary => "Primary only",
@@ -101,11 +148,12 @@ impl Setting {
             Self::Equalizer => on_off(config.island.animate_equalizer),
             Self::LyricsMotion => on_off(config.island.lyrics_background_motion),
             Self::IslandFiles => on_off(config.island.file_shelf),
+            Self::ClipboardHistory => on_off(config.island.clipboard_history),
             Self::IslandOrder => return widget_order(&config.island.widget_order)
                 .iter().map(|s| if *s == "media" { "M" } else { "F" })
                 .collect::<Vec<_>>().join(" · "),
             Self::SignIn => on_off(sign_in),
-            Self::OpenFile => "",
+            Self::OpenFile | Self::Reload => "",
         }.to_owned()
     }
 
@@ -128,6 +176,7 @@ impl Setting {
                 };
                 key("appearance", "backdrop", &format!("\"{next}\""))
             }
+            Self::Font => key("appearance", "font", &format!("\"{}\"", next_font(&config.appearance.font))),
             Self::TopBars => {
                 let next = match config.topbar.monitors {
                     MonitorScope::All => "primary",
@@ -165,6 +214,7 @@ impl Setting {
             Self::Equalizer => key("island", "animate_equalizer", &(!config.island.animate_equalizer).to_string()),
             Self::LyricsMotion => key("island", "lyrics_background_motion", &(!config.island.lyrics_background_motion).to_string()),
             Self::IslandFiles => key("island", "file_shelf", &(!config.island.file_shelf).to_string()),
+            Self::ClipboardHistory => key("island", "clipboard_history", &(!config.island.clipboard_history).to_string()),
             Self::IslandOrder => {
                 let current = widget_order(&config.island.widget_order);
                 let i = ORDERS.iter().position(|o| *o == current).unwrap_or(0);
@@ -173,6 +223,9 @@ impl Setting {
             }
             Self::SignIn => Change::SignIn(!sign_in),
             Self::OpenFile => Change::OpenFile,
+            Self::Reload => Change::Reload,
+            Self::WindowsFont => Change::WindowsFont { restore: false },
+            Self::WindowsFontRestore => Change::WindowsFont { restore: true },
         }
     }
 }
@@ -197,6 +250,8 @@ enum Change {
     Key(&'static str, &'static str, String),
     SignIn(bool),
     OpenFile,
+    Reload,
+    WindowsFont { restore: bool },
 }
 
 pub struct SettingsView {
@@ -437,6 +492,15 @@ impl View for SettingsView {
                 bar::close(self.hwnd);
                 false
             }
+            Change::Reload => {
+                app::reload();
+                false
+            }
+            Change::WindowsFont { restore } => {
+                launch::powershell_elevated(WINDOWS_FONT_SCRIPT, &windows_font_arguments(&self.config, restore));
+                bar::close(self.hwnd);
+                false
+            }
         }
     }
 
@@ -449,6 +513,27 @@ impl View for SettingsView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_font_rows_pass_the_configured_family() {
+        let mut config = Config::default();
+        assert!(windows_font_arguments(&config, false).starts_with("-Family 'auto' -FontDir '"));
+        config.appearance.font = "SF Pro".into();
+        assert!(windows_font_arguments(&config, false).starts_with("-Family 'SF Pro' "));
+        assert_eq!(windows_font_arguments(&config, true), "-Restore");
+        assert!(matches!(Setting::WindowsFontRestore.change(&config, false, 1), Change::WindowsFont { restore: true }));
+    }
+
+    #[test]
+    fn font_row_cycles_installed_families() {
+        let mut config = Config::default();
+        assert_eq!(Setting::Font.value(&config, false), "Auto");
+        assert!(matches!(Setting::Font.change(&config, false, 1),
+            Change::Key("appearance", "font", ref v) if v == "\"Segoe UI Variable Text\""));
+        config.appearance.font = "Arial".into();
+        assert_eq!(super::next_font("Arial"), "auto");
+        assert_eq!(Setting::Font.value(&config, false), "Arial");
+    }
 
     #[test]
     fn dock_settings_change_effect_and_sizes() {

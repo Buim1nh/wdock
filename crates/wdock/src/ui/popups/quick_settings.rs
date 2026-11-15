@@ -6,6 +6,7 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
@@ -14,7 +15,7 @@ use crate::model::config::Backdrop;
 use crate::platform::launch;
 use crate::platform::session::{self, SessionAction};
 use crate::services::audio::{Output, OutputKind};
-use crate::services::{self, NetState, SystemStatus};
+use crate::services::{self, NetState, Portal, SystemStatus};
 use crate::ui::bar::{self, Button, PaintCx, View};
 use crate::ui::gfx::{rect, rounded};
 use crate::ui::glyphs;
@@ -50,16 +51,18 @@ fn animate_wifi(progress: f32, open: bool) -> (f32, bool) {
 enum Hit {
     Network,
     Wifi(WifiHit),
-    Bluetooth,
-    BluetoothExpand,
-    BluetoothDevice(usize),
-    BluetoothSettings,
     Projection,
     ProjectionMode(usize),
     NightLight,
     EnergySaver,
     Airplane,
     Mute,
+    MicMute,
+    Microphone,
+    InputToggle,
+    Input(usize),
+    Camera,
+    CameraSettings,
     Volume,
     OutputToggle,
     Output(usize),
@@ -81,8 +84,7 @@ const POWER_ROW: [(Hit, &str, &str); 6] = [
     (Hit::Settings, glyphs::SETTINGS, "Settings"),
 ];
 
-const QUICK_TILES: [(Hit, &str, &str); 5] = [
-    (Hit::Bluetooth, glyphs::BLUETOOTH, "Bluetooth"),
+const QUICK_TILES: [(Hit, &str, &str); 4] = [
     (Hit::Projection, glyphs::DISPLAY, "Project"),
     (Hit::NightLight, "\u{E708}", "Night light"),
     (Hit::EnergySaver, "\u{E945}", "Energy saver"),
@@ -108,20 +110,15 @@ pub struct QuickSettingsView {
     confirm: Option<SessionAction>,
     outputs: Vec<Output>,
     outputs_open: bool,
+    inputs: Vec<Output>,
+    inputs_open: bool,
     /// The Wi-Fi list; `Some` (and scanning) only while expanded.
     wifi: Option<WifiPanel>,
     wifi_open: bool,
     wifi_progress: f32,
     wifi_clip: D2D_RECT_F,
-    bluetooth: Option<bool>,
-    bluetooth_open: bool,
-    bluetooth_devices: Option<Vec<services::quick_controls::BluetoothDevice>>,
-    bluetooth_scroll: usize,
-    bluetooth_action: Option<(String, String)>,
-    bluetooth_scanning: bool,
     quick_message: Option<String>,
     projection_open: bool,
-    quick_tick: u32,
     energy_saver: Option<bool>,
     night_light: Option<bool>,
     airplane: Option<bool>,
@@ -142,19 +139,14 @@ impl QuickSettingsView {
             confirm: None,
             outputs: services::audio_outputs(),
             outputs_open: false,
+            inputs: services::microphone_inputs(),
+            inputs_open: false,
             wifi: None,
             wifi_open: false,
             wifi_progress: 0.0,
             wifi_clip: rect(0.0, 0.0, 0.0, 0.0),
-            bluetooth: services::quick_controls::bluetooth(),
-            bluetooth_open: false,
-            bluetooth_devices: None,
-            bluetooth_scroll: 0,
-            bluetooth_action: None,
-            bluetooth_scanning: false,
             quick_message: None,
             projection_open: false,
-            quick_tick: 0,
             energy_saver: services::quick_controls::energy_saver(),
             night_light: services::quick_controls::night_light(),
             airplane: services::quick_controls::airplane(),
@@ -181,27 +173,13 @@ impl QuickSettingsView {
         }
 
         let tile_gap = 5.0 * s;
-        let tile_width = (right - left - 2.0 * tile_gap) / 3.0;
+        let tile_width = (right - left - 3.0 * tile_gap) / 4.0;
         for (i, (hit, _, _)) in QUICK_TILES.iter().enumerate() {
-            let x = left + (i % 3) as f32 * (tile_width + tile_gap);
-            let top = y + (i / 3) as f32 * (QUICK_TILE_HEIGHT + 5.0) * s;
-            if *hit == Hit::Bluetooth {
-                self.targets.push((Hit::BluetoothExpand, rect(x + tile_width - 26.0 * s, top, x + tile_width, top + 27.0 * s)));
-            }
-            self.targets.push((*hit, rect(x, top, x + tile_width, top + QUICK_TILE_HEIGHT * s)));
+            let x = left + i as f32 * (tile_width + tile_gap);
+            self.targets.push((*hit, rect(x, y, x + tile_width, y + QUICK_TILE_HEIGHT * s)));
         }
-        y += (2.0 * QUICK_TILE_HEIGHT + 10.0) * s;
+        y += (QUICK_TILE_HEIGHT * s) + GAP * s;
 
-        if self.bluetooth_open {
-            if let Some(devices) = self.bluetooth_devices.as_ref().filter(|_| self.bluetooth != Some(false)) {
-                for i in self.bluetooth_scroll..devices.len().min(self.bluetooth_scroll + 3) {
-                    self.targets.push((Hit::BluetoothDevice(i), rect(left, y, right, y + 34.0 * s)));
-                    y += 34.0 * s;
-                }
-            }
-            self.targets.push((Hit::BluetoothSettings, rect(left, y, right, y + 34.0 * s)));
-            y += (34.0 + GAP) * s;
-        }
         if self.projection_open {
             for i in 0..4 {
                 self.targets.push((Hit::ProjectionMode(i), rect(left, y, right, y + 30.0 * s)));
@@ -216,6 +194,10 @@ impl QuickSettingsView {
             if hit == Hit::Volume {
                 targets.push((Hit::Mute, button));
                 targets.push((Hit::OutputToggle, rect(left + 70.0 * s, *y - LABEL * s, right, *y)));
+            }
+            if hit == Hit::Microphone {
+                targets.push((Hit::MicMute, button));
+                targets.push((Hit::InputToggle, rect(left + 94.0 * s, *y - LABEL * s, right, *y)));
             }
             let track = rect(button.right + 10.0 * s, *y, right - 40.0 * s, *y + SLIDER_ROW * s);
             targets.push((hit, track));
@@ -232,6 +214,19 @@ impl QuickSettingsView {
                 y += GAP * s;
             }
         }
+        if self.status.microphone.is_some() {
+            slider(Hit::Microphone, &mut y, &mut self.targets, &mut self.tracks);
+            if self.inputs_open {
+                for i in 0..self.inputs.len() {
+                    self.targets.push((Hit::Input(i), rect(left, y, right, y + OUTPUT_ROW * s)));
+                    y += OUTPUT_ROW * s;
+                }
+                y += GAP * s;
+            }
+        }
+        self.targets.push((Hit::Camera, rect(left, y, right - 38.0 * s, y + 34.0 * s)));
+        self.targets.push((Hit::CameraSettings, rect(right - 34.0 * s, y, right, y + 34.0 * s)));
+        y += 44.0 * s;
         for i in 0..self.status.displays.len() {
             slider(Hit::Brightness(i), &mut y, &mut self.targets, &mut self.tracks);
         }
@@ -271,6 +266,7 @@ impl QuickSettingsView {
         }
         match slider {
             Hit::Volume => self.status.volume.map_or(0.0, |v| if v.muted { 0.0 } else { v.level }),
+            Hit::Microphone => self.status.microphone.map_or(0.0, |v| v.level),
             Hit::Brightness(i) => self.status.displays.get(i).map_or(0.0, |d| f32::from(d.percent) / 100.0),
             _ => 0.0,
         }
@@ -288,6 +284,7 @@ impl QuickSettingsView {
         let (slider, value) = (drag.slider, drag.value);
         match slider {
             Hit::Volume => services::set_volume(value),
+            Hit::Microphone => services::set_microphone_level(value),
             Hit::Brightness(i) => self.write_brightness(i, value, false),
             _ => {}
         }
@@ -316,9 +313,12 @@ impl QuickSettingsView {
 impl View for QuickSettingsView {
     fn attach(&mut self, hwnd: HWND) {
         self.hwnd = hwnd;
-        services::quick_controls::refresh_bluetooth();
+        services::quick_controls::watch(Some(hwnd), TIMER_QUICK_STATE);
         services::quick_controls::refresh_airplane();
-        unsafe { SetTimer(Some(hwnd), TIMER_QUICK_STATE, 2000, None); }
+    }
+
+    fn destroy(&mut self) {
+        services::quick_controls::watch(None, 0);
     }
 
     fn window_corner_radius(&self) -> Option<f32> { Some(PANEL_RADIUS) }
@@ -337,8 +337,12 @@ impl View for QuickSettingsView {
         if status == self.status && !wifi_changed {
             return false;
         }
+        if let Some(wifi) = &mut self.wifi {
+            wifi.set_portal(status.portal);
+        }
         if status.audio_devices != self.status.audio_devices {
             self.outputs = services::audio_outputs();
+            self.inputs = services::microphone_inputs();
         }
         self.status = status;
         self.layout();
@@ -363,6 +367,13 @@ impl View for QuickSettingsView {
         ) else {
             return;
         };
+        for format in [&normal, &right_aligned] {
+            let trimming = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, ..Default::default() };
+            unsafe {
+                let sign = cx.gfx.dwrite.CreateEllipsisTrimmingSign(format).ok();
+                let _ = format.SetTrimming(&trimming, sign.as_ref());
+            }
+        }
         let fill = |r: D2D_RECT_F, radius: f32, color| {
             if let Ok(brush) = cx.gfx.brush(color) {
                 unsafe { cx.dc.FillRoundedRectangle(&rounded(r, radius), &brush) };
@@ -374,11 +385,14 @@ impl View for QuickSettingsView {
             match hit {
                 Hit::Network => {
                     fill(r, 16.0 * s, plate_color(hit));
-                    let (glyph, title, detail) = match &self.status.network {
+                    let (glyph, title, mut detail) = match &self.status.network {
                         NetState::Wifi { ssid, signal } => (glyphs::WIFI, "Wi-Fi", format!("{ssid} · {signal}%")),
                         NetState::Wired => (glyphs::ETHERNET, "Ethernet", "Connected".to_owned()),
                         NetState::Offline => (glyphs::WIFI, "Network", "Not connected".to_owned()),
                     };
+                    if self.status.portal == Portal::Detected {
+                        detail = "Sign-in required".to_owned();
+                    }
                     let badge = rect(r.left + 10.0 * s, r.top + 10.0 * s, r.left + 42.0 * s, r.bottom - 10.0 * s);
                     let online = self.status.network != NetState::Offline;
                     fill(badge, 16.0 * s, if online { theme.accent } else { theme.control });
@@ -396,40 +410,18 @@ impl View for QuickSettingsView {
                     text::draw(cx, glyphs::CHEVRON_UP, &icon, chevron_rect, up);
                 }
                 Hit::Wifi(_) => {}
-                Hit::BluetoothExpand => {}
-                Hit::BluetoothDevice(i) => {
-                    if let Some(device) = self.bluetooth_devices.as_ref().and_then(|d| d.get(i)) {
-                        if self.hot == Some(hit) { fill(r, 8.0 * s, theme.hover); }
-                        text::draw(cx, glyphs::BLUETOOTH, &icon, rect(r.left, r.top, r.left + 28.0*s, r.bottom), theme.text_dim);
-                        text::draw(cx, &device.name, &normal, rect(r.left + 32.0*s, r.top, r.right - 88.0*s, r.bottom), theme.text);
-                        let state = self.bluetooth_action.as_ref().filter(|(id, _)| id == &device.id).map(|(_, state)| state.as_str()).unwrap_or(if device.connected == Some(true) { "Connected" } else if device.paired { "Paired" } else { "Pair" });
-                        text::draw(cx, state, &right_aligned, rect(r.right - 88.0*s, r.top, r.right - 5.0*s, r.bottom), theme.text_dim);
-                    }
-                }
-                Hit::BluetoothSettings => {
-                    if self.hot == Some(hit) { fill(r, 8.0*s, theme.hover); }
-                    let scan_failed = self.bluetooth_action.as_ref().is_some_and(|(id, message)| id.is_empty() && message.starts_with("Bluetooth scan failed"));
-                    let label = if self.bluetooth == Some(false) { "Bluetooth is off" } else if scan_failed { "Scan failed · Windows settings ↗" } else if self.bluetooth_scanning || self.bluetooth_devices.is_none() { "Searching for devices…" } else if self.bluetooth_devices.as_ref().is_some_and(Vec::is_empty) { "No Bluetooth devices found" } else { "More Bluetooth settings ↗" };
-                    text::draw(cx, label, &normal, rect(r.left + 8.0*s, r.top, r.right - 8.0*s, r.bottom), theme.text_dim);
-                }
                 Hit::ProjectionMode(i) => {
                     if self.hot == Some(hit) { fill(r, 8.0*s, theme.hover); }
                     let labels = ["PC screen only", "Duplicate", "Extend", "Second screen only"];
                     text::draw(cx, labels[i], &normal, rect(r.left + 10.0*s, r.top, r.right - 10.0*s, r.bottom), theme.text);
                 }
-                Hit::Bluetooth | Hit::Projection | Hit::NightLight | Hit::EnergySaver | Hit::Airplane => {
+                Hit::Projection | Hit::NightLight | Hit::EnergySaver | Hit::Airplane => {
                     let (_, glyph, label) = QUICK_TILES.iter().find(|(h, _, _)| *h == hit).unwrap();
-                    let active = match hit { Hit::Bluetooth => self.bluetooth == Some(true), Hit::EnergySaver => self.energy_saver == Some(true), Hit::NightLight => self.night_light == Some(true), Hit::Airplane => self.airplane == Some(true), _ => false };
+                    let active = match hit { Hit::EnergySaver => self.energy_saver == Some(true), Hit::NightLight => self.night_light == Some(true), Hit::Airplane => self.airplane == Some(true), _ => false };
                     fill(r, 10.0 * s, if active { theme.accent } else { plate_color(hit) });
                     let color = if active { theme.on_accent } else { theme.text };
                     text::draw(cx, glyph, &big_icon, rect(r.left, r.top + 5.0*s, r.right, r.top + 28.0*s), color);
-                    let opens_windows = false;
                     text::draw(cx, label, &small, rect(r.left + 2.0*s, r.top + 30.0*s, r.right - 2.0*s, r.bottom - 3.0*s), color);
-                    if hit == Hit::Bluetooth {
-                        let glyph = if self.bluetooth_open { glyphs::CHEVRON_UP } else { glyphs::CHEVRON_DOWN };
-                        text::draw(cx, glyph, &icon, rect(r.right - 26.0*s, r.top, r.right, r.top + 27.0*s), color);
-                    }
-                    if opens_windows { text::draw(cx, "↗", &small, rect(r.right - 16.0*s, r.top + 2.0*s, r.right - 3.0*s, r.top + 18.0*s), color); }
                 }
                 Hit::Mute => {
                     let muted = self.status.volume.is_some_and(|v| v.muted);
@@ -437,27 +429,37 @@ impl View for QuickSettingsView {
                     let level = self.slider_value(Hit::Volume);
                     text::draw(cx, glyphs::volume(level, muted), &icon, r, theme.text);
                 }
-                Hit::OutputToggle => {
-                    if let Some(current) = self.outputs.iter().find(|o| o.default) {
+                Hit::MicMute => {
+                    fill(r, 15.0 * s, plate_color(hit));
+                    let muted = self.status.microphone.is_some_and(|v| v.muted);
+                    text::draw(cx, if muted { glyphs::MIC_MUTED } else { glyphs::MIC }, &icon, r, if muted { theme.text_dim } else { theme.text });
+                }
+                Hit::Camera | Hit::CameraSettings => {
+                    fill(r, 12.0 * s, plate_color(hit));
+                    text::draw(cx, if hit == Hit::Camera { glyphs::CAMERA } else { glyphs::SETTINGS }, &icon, rect(r.left, r.top, r.left + 34.0 * s, r.bottom), theme.text);
+                    if hit == Hit::Camera { text::draw(cx, "Camera preview", &normal, rect(r.left + 36.0 * s, r.top, r.right, r.bottom), theme.text); }
+                }
+                Hit::InputToggle | Hit::OutputToggle => {
+                    if let Some(current) = (if hit == Hit::InputToggle { &self.inputs } else { &self.outputs }).iter().find(|o| o.default) {
                         let color = if self.hot == Some(hit) { theme.text } else { theme.text_dim };
                         text::draw(cx, &current.name, &right_aligned, rect(r.left, r.top, r.right - 22.0 * s, r.bottom), color);
-                        let chevron = if self.outputs_open { glyphs::CHEVRON_UP } else { glyphs::CHEVRON_DOWN };
+                        let chevron = if if hit == Hit::InputToggle { self.inputs_open } else { self.outputs_open } { glyphs::CHEVRON_UP } else { glyphs::CHEVRON_DOWN };
                         text::draw(cx, chevron, &icon, rect(r.right - 20.0 * s, r.top, r.right, r.bottom), color);
                     }
                 }
-                Hit::Output(i) => {
-                    let Some(output) = self.outputs.get(i) else {
+                Hit::Input(i) | Hit::Output(i) => {
+                    let Some(output) = (if matches!(hit, Hit::Input(_)) { &self.inputs } else { &self.outputs }).get(i) else {
                         continue;
                     };
                     if self.hot == Some(hit) {
                         fill(r, 8.0 * s, theme.hover);
                     }
-                    let glyph = match output.kind {
+                    let glyph = if matches!(hit, Hit::Input(_)) { glyphs::MIC } else { match output.kind {
                         OutputKind::Headphones => glyphs::HEADPHONES,
                         OutputKind::Bluetooth => glyphs::BLUETOOTH,
                         OutputKind::Display => glyphs::DISPLAY,
                         OutputKind::Speakers | OutputKind::Other => glyphs::SPEAKER,
-                    };
+                    }};
                     text::draw(cx, glyph, &icon, rect(r.left, r.top, r.left + 30.0 * s, r.bottom), theme.text);
                     let name_color = if output.default { theme.accent } else { theme.text };
                     text::draw(cx, &output.name, &normal, rect(r.left + 36.0 * s, r.top, r.right - 26.0 * s, r.bottom), name_color);
@@ -465,9 +467,10 @@ impl View for QuickSettingsView {
                         text::draw(cx, glyphs::CHECK, &icon, rect(r.right - 26.0 * s, r.top, r.right, r.bottom), theme.accent);
                     }
                 }
-                Hit::Volume | Hit::Brightness(_) => {
+                Hit::Volume | Hit::Microphone | Hit::Brightness(_) => {
                     let label = match hit {
                         Hit::Brightness(i) => self.status.displays.get(i).map_or("Display", |d| d.name.as_str()),
+                        Hit::Microphone => "Microphone",
                         _ => "Sound",
                     };
                     let label_rect = rect(r.left - (ICON_BUTTON + 10.0) * s, r.top - LABEL * s, r.right, r.top);
@@ -561,7 +564,7 @@ impl View for QuickSettingsView {
         if button != Button::Left {
             return false;
         }
-        let Some(slider @ (Hit::Volume | Hit::Brightness(_))) = self.hit(x, y) else {
+        let Some(slider @ (Hit::Volume | Hit::Microphone | Hit::Brightness(_))) = self.hit(x, y) else {
             return false;
         };
         unsafe { SetCapture(self.hwnd) };
@@ -584,47 +587,17 @@ impl View for QuickSettingsView {
         match self.hit(x, y) {
             Some(Hit::Network) => {
                 self.wifi_open = !self.wifi_open;
-                if self.wifi_open { self.bluetooth_open = false; self.projection_open = false; }
-                if self.wifi_open && self.wifi.is_none() { self.wifi = Some(WifiPanel::open(self.hwnd)); }
+                if self.wifi_open { self.projection_open = false; }
+                if self.wifi_open && self.wifi.is_none() { self.wifi = Some(WifiPanel::open(self.hwnd, self.status.portal)); }
                 unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); }
                 self.hot = None;
                 self.layout();
             }
-            Some(Hit::Bluetooth) => { services::quick_controls::toggle_bluetooth(); self.quick_message = services::quick_controls::quick_message(); }
-            Some(Hit::BluetoothExpand) => {
-                self.bluetooth_open = !self.bluetooth_open;
-                if self.bluetooth_open {
-                    self.projection_open = false;
-                    if self.wifi_open {
-                        self.wifi_open = false;
-                        unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); }
-                    }
-                    self.bluetooth_devices = services::quick_controls::bluetooth_devices();
-                    services::quick_controls::refresh_bluetooth_devices();
-                    self.bluetooth_scanning = services::quick_controls::bluetooth_scan_busy();
-                }
-                self.hot = None;
-                self.layout();
-            }
-            Some(Hit::BluetoothDevice(i)) => {
-                if let Some(device) = self.bluetooth_devices.as_ref().and_then(|d| d.get(i)) {
-                    if !device.paired && device.can_pair {
-                        services::quick_controls::pair_bluetooth_device(device.id.clone());
-                    } else if device.connected != Some(true) {
-                        services::quick_controls::report("Reconnect unavailable for this device");
-                        self.quick_message = services::quick_controls::quick_message();
-                    }
-                }
-            }
-            Some(Hit::BluetoothSettings) => {
-                launch::open("ms-settings:bluetooth");
-                self.close();
-            }
             Some(Hit::Projection) => {
                 self.projection_open = !self.projection_open;
-                if self.projection_open {
-                    self.bluetooth_open = false;
-                    if self.wifi_open { self.wifi_open = false; unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); } }
+                if self.projection_open && self.wifi_open {
+                    self.wifi_open = false;
+                    unsafe { SetTimer(Some(self.hwnd), TIMER_WIFI_ANIMATE, WIFI_FRAME_MS, None); }
                 }
                 self.layout();
             }
@@ -644,9 +617,24 @@ impl View for QuickSettingsView {
                     Outcome::Nothing => return false,
                 }
             }
+            Some(Hit::Camera) => { crate::platform::camera::show(); self.close(); }
+            Some(Hit::CameraSettings) => { launch::open("ms-settings:camera"); self.close(); }
+            Some(Hit::MicMute) => services::set_microphone_muted(!self.status.microphone.is_some_and(|v| v.muted)),
+            Some(Hit::InputToggle) => {
+                self.inputs = services::microphone_inputs();
+                self.inputs_open = !self.inputs_open;
+                self.outputs_open = false;
+                self.layout();
+            }
+            Some(Hit::Input(i)) => {
+                if let Some(input) = self.inputs.get(i).filter(|o| !o.default) { services::set_default_microphone(&input.id); }
+                self.inputs_open = false;
+                self.layout();
+            }
             Some(Hit::OutputToggle) => {
                 self.outputs = services::audio_outputs();
                 self.outputs_open = !self.outputs_open;
+                self.inputs_open = false;
                 self.layout();
             }
             Some(Hit::Output(i)) => {
@@ -683,12 +671,6 @@ impl View for QuickSettingsView {
     }
 
     fn wheel(&mut self, x: f32, y: f32, delta: i16) -> bool {
-        if self.bluetooth_open && matches!(self.hit(x, y), Some(Hit::BluetoothDevice(_) | Hit::BluetoothSettings)) {
-            let max = self.bluetooth_devices.as_ref().map_or(0, |d| d.len().saturating_sub(3));
-            let next = if delta > 0 { self.bluetooth_scroll.saturating_sub(1) } else { (self.bluetooth_scroll + 1).min(max) };
-            if next != self.bluetooth_scroll { self.bluetooth_scroll = next; self.layout(); return true; }
-            return false;
-        }
         let step = if delta > 0 { 0.05 } else { -0.05 };
         if let Some(wifi) = self.wifi.as_mut().filter(|w| self.wifi_open && self.wifi_progress >= 1.0 && w.contains(x, y)) {
             let changed = wifi.wheel(delta);
@@ -699,6 +681,7 @@ impl View for QuickSettingsView {
         }
         match self.hit(x, y) {
             Some(Hit::Volume | Hit::Mute) => services::nudge_volume(step),
+            Some(Hit::Microphone | Hit::MicMute) => services::set_microphone_level((self.slider_value(Hit::Microphone) + step).clamp(0.0, 1.0)),
             Some(Hit::Brightness(i)) => {
                 let current = self.slider_value(Hit::Brightness(i));
                 self.write_brightness(i, (current + step).clamp(0.0, 1.0), true);
@@ -710,35 +693,16 @@ impl View for QuickSettingsView {
 
     fn timer(&mut self, id: usize) -> bool {
         if id == TIMER_QUICK_STATE {
-            let mut devices_changed = false;
-            self.quick_tick = self.quick_tick.wrapping_add(1);
-            if self.bluetooth_open {
-                let devices = services::quick_controls::bluetooth_devices();
-                devices_changed = devices != self.bluetooth_devices;
-                self.bluetooth_devices = devices;
-                self.bluetooth_scroll = self.bluetooth_scroll.min(self.bluetooth_devices.as_ref().map_or(0, |d| d.len().saturating_sub(3)));
-                if self.quick_tick % 5 == 0 { services::quick_controls::refresh_bluetooth_devices(); }
-                if devices_changed { self.layout(); }
-            }
-            let action = services::quick_controls::bluetooth_device_action();
-            let action_changed = self.bluetooth_action != action;
-            self.bluetooth_action = action;
-            let scanning = services::quick_controls::bluetooth_scan_busy();
-            let scanning_changed = self.bluetooth_scanning != scanning;
-            self.bluetooth_scanning = scanning;
+            // Posted by a quick-controls worker when it finishes; not a repeating timer.
             let quick_message = services::quick_controls::quick_message();
             let message_changed = quick_message.is_some() && self.quick_message != quick_message;
             if message_changed { self.quick_message = quick_message; }
-            let bt = services::quick_controls::bluetooth();
             let saver = services::quick_controls::energy_saver();
             let night = services::quick_controls::night_light();
             let airplane = services::quick_controls::airplane();
-            services::quick_controls::refresh_bluetooth();
-            services::quick_controls::refresh_airplane();
-            let changed = self.bluetooth != bt || self.energy_saver != saver || self.night_light != night || self.airplane != airplane;
-            self.bluetooth = bt; self.energy_saver = saver; self.night_light = night; self.airplane = airplane;
-            if changed && self.bluetooth_open { self.layout(); }
-            return changed || devices_changed || action_changed || message_changed || scanning_changed;
+            let changed = self.energy_saver != saver || self.night_light != night || self.airplane != airplane;
+            self.energy_saver = saver; self.night_light = night; self.airplane = airplane;
+            return changed || message_changed;
         }
         if id == TIMER_WIFI_ANIMATE {
             let (next, done) = animate_wifi(self.wifi_progress, self.wifi_open);
@@ -760,13 +724,34 @@ impl View for QuickSettingsView {
     }
 
     fn deactivated(&mut self) -> bool {
-        self.drag.is_none() && !services::quick_controls::bluetooth_device_busy()
+        self.drag.is_none()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::animate_wifi;
+    use super::*;
+
+    #[test]
+    fn microphone_controls_do_not_overlap_at_fractional_dpi() {
+        for scale in [1.0, 1.25, 1.5] {
+            let mut view = QuickSettingsView::new(RECT::default(), scale);
+            view.status.volume = Some(services::Volume { level: 0.5, muted: false });
+            view.status.microphone = Some(services::Volume { level: 0.7, muted: true });
+            view.inputs = vec![Output { id: "mic".into(), name: "Microphone".into(), kind: OutputKind::Other, default: true }];
+            view.inputs_open = true;
+            view.layout();
+            assert_eq!(view.slider_value(Hit::Microphone), 0.7);
+            for (i, (_, a)) in view.targets.iter().enumerate() {
+                assert!(a.left >= 0.0 && a.right <= WIDTH * scale && a.bottom <= view.height);
+                for (_, b) in &view.targets[i + 1..] {
+                    assert!(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top);
+                }
+            }
+            assert!(view.targets.iter().any(|(hit, _)| *hit == Hit::MicMute));
+            assert!(view.targets.iter().any(|(hit, _)| *hit == Hit::Camera));
+        }
+    }
 
     #[test]
     fn wifi_animation_converges_and_can_reverse() {

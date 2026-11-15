@@ -1,5 +1,5 @@
 use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
 use windows::core::{PCWSTR, w};
 
 /// Held for the lifetime of the shell (or the guard); a second one refuses to start.
@@ -14,6 +14,17 @@ impl SingleInstance {
     /// Returns `Ok(None)` when another guard is already running in this session.
     pub fn acquire_guard() -> windows::core::Result<Option<Self>> {
         Self::named(w!("Local\\wdock-guard-instance"))
+    }
+
+    /// Whether a guard is alive to restart a shell that dies.
+    pub fn guard_running() -> bool {
+        match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, w!("Local\\wdock-guard-instance")) } {
+            Ok(handle) => {
+                let _ = unsafe { CloseHandle(handle) };
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     fn named(name: PCWSTR) -> windows::core::Result<Option<Self>> {

@@ -113,6 +113,7 @@ mod tests {
         text = set_key(&text, "dock", "hover_size", "80");
         text = set_key(&text, "island", "enabled", "false");
         text = set_key(&text, "island", "animate_equalizer", "false");
+        text = set_key(&text, "island", "clipboard_history", "true");
         let config: Config = toml::from_str(&text).expect("edited template parses");
         assert_eq!(config.appearance.theme, config::ThemeMode::Light);
         assert_eq!(config.appearance.backdrop, config::Backdrop::Solid);
@@ -122,6 +123,7 @@ mod tests {
         assert_eq!(config.dock.base_icon_size(), 40.0);
         assert_eq!(config.dock.hover_icon_size(), 80.0);
         assert!(!config.island.enabled && !config.island.animate_equalizer);
+        assert!(config.island.clipboard_history);
         // Comments from the template survive the edits.
         assert!(text.contains("# \"auto\" follows Windows"));
     }

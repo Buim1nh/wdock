@@ -1,5 +1,7 @@
 pub mod balloon;
 pub mod calendar;
+pub mod bookmarks;
+pub mod clipboard;
 pub mod launcher;
 pub mod menu;
 pub mod overflow;

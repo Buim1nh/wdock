@@ -3,7 +3,7 @@
 
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
+use windows::Win32::Foundation::{CloseHandle, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
@@ -16,11 +16,11 @@ use windows::Win32::System::Threading::{
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegGetValueW, RRF_RT_REG_DWORD};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GA_ROOT, GA_ROOTOWNER, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
+    FindWindowExW, GA_ROOT, GA_ROOTOWNER, GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
     GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindowAsync,
-    SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SwitchToThisWindow, WS_EX_APPWINDOW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    IsIconic, IsWindowVisible, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+    SetWindowPos, ShowWindowAsync, SwitchToThisWindow, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WindowFromPoint,
 };
 use windows::core::{BSTR, HSTRING, PCWSTR, PWSTR, w};
 
@@ -334,6 +334,16 @@ pub fn move_below_topbar(hwnd: HWND, top: i32, monitor_bottom: i32) -> bool {
     }
 }
 
+/// The top-level window that takes the mouse at a screen point.
+pub fn window_at(point: POINT) -> HWND {
+    unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) }
+}
+
+/// Whether any window, shown or not, sits above this one in the z-order.
+pub fn has_window_above(hwnd: HWND) -> bool {
+    unsafe { GetWindow(hwnd, GW_HWNDPREV) }.is_ok()
+}
+
 /// Covers its whole monitor without a caption: games and full-screen video.
 pub fn is_fullscreen(hwnd: HWND) -> bool {
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
@@ -372,11 +382,6 @@ pub fn is_fullscreen_app(hwnd: HWND) -> bool {
         return false;
     }
     !matches!(class_name(root).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") && is_fullscreen(root)
-}
-
-/// Hides without activating anything; async so a hung app cannot block us.
-pub fn hide(hwnd: HWND) {
-    let _ = unsafe { ShowWindowAsync(hwnd, windows::Win32::UI::WindowsAndMessaging::SW_HIDE) };
 }
 
 /// Shows in its previous state (minimized stays minimized) without activating.

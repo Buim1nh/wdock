@@ -1,2 +1,6 @@
 target/
 *.log
+
+# Locally supplied fonts (SF Pro may not be redistributed)
+/fonts/*.otf
+/fonts/*.ttf

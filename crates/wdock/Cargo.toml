@@ -14,7 +14,7 @@ windows-core = "0.62"
 windows-future = "0.3"
 windows-numerics = "0.3"
 windows-collections = "0.3"
-toml = { version = "1", default-features = false, features = ["parse", "serde"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "display"] }
 win-nightlight-lib = "0.5.0"
 
 [dependencies.windows]
@@ -43,6 +43,8 @@ features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
+    "Win32_Media_DirectShow",
+    "Win32_Media_MediaFoundation",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     "Win32_NetworkManagement_IpHelper",
@@ -54,6 +56,7 @@ features = [
     "Win32_Storage_FileSystem",
     "Win32_Storage_Packaging_Appx",
     "Win32_UI_Accessibility",
+    "Win32_UI_Controls",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Com",
     "Win32_System_Diagnostics_Debug",
@@ -62,6 +65,7 @@ features = [
     "Win32_System_DataExchange",
     "Win32_System_Variant",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Power",
     "Win32_System_Rpc",

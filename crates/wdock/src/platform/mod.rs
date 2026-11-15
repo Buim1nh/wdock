@@ -1,4 +1,6 @@
 pub mod appbar;
+pub mod bookmarks;
+pub mod clipboard;
 pub mod sign_in;
 pub mod launch;
 pub mod monitors;
@@ -11,3 +13,5 @@ pub mod island_drag;
 pub mod winevents;
 pub mod wininfo;
 pub mod virtual_desktops;
+
+pub mod camera;

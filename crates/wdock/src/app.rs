@@ -13,6 +13,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::HMONITOR;
@@ -29,9 +30,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DeregisterShellHookWindow, DestroyWindow, DispatchMessageW,
     GetForegroundWindow, GetMessageW, KillTimer, MSG, PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE,
     PostMessageW, PostQuitMessage, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW, SetTimer,
-    TranslateMessage, EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, WM_APP, WM_DESTROY,
-    WM_HOTKEY, WM_POWERBROADCAST,
-    WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
+    TranslateMessage, EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, WM_APP, WM_CLIPBOARDUPDATE, WM_DESTROY,
+    WM_HOTKEY, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_TIMER, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{Result, w};
@@ -43,6 +43,7 @@ use crate::model::config::{self, AutoHide, Config, MonitorScope};
 use crate::model::pins;
 use crate::model::windows::{self as window_model, WindowModel};
 use crate::platform::appbar::{self, Edge};
+use crate::platform::clipboard;
 use crate::platform::monitors::{self, Monitor};
 use crate::platform::tray_host::{self, TrayEvent, TrayHost, WM_APP_TRAY};
 use crate::platform::winevents::{self, WM_APP_WINEVENTS};
@@ -66,7 +67,7 @@ const HOTKEY_EMERGENCY_EXIT: i32 = 1;
 const HOTKEY_LAUNCHER: i32 = 2;
 
 const WM_APP_REBUILD: u32 = WM_APP + 1;
-/// The window model changed outside a WinEvent batch (workspace switch, pinning).
+/// The window model changed outside a WinEvent batch (pinning).
 const WM_APP_NOTIFY: u32 = WM_APP + 4;
 /// An AppBar notification says a full-screen app came or went.
 const WM_APP_FULLSCREEN: u32 = WM_APP + 5;
@@ -74,20 +75,24 @@ const WM_APP_FULLSCREEN: u32 = WM_APP + 5;
 const WM_APP_CONFIG: u32 = WM_APP + 24;
 const WM_APP_ISLAND_APPEARANCE: u32 = WM_APP + 25;
 const WM_APP_LYRICS: u32 = WM_APP + 26;
+/// The user asked for a reload; also posted by `wdock --reload`.
+pub const WM_APP_RELOAD: u32 = WM_APP + 28;
+/// Slower than this, a window-event batch is what makes the UI feel laggy.
+const SLOW_EVENTS: Duration = Duration::from_millis(100);
 const TIMER_REBUILD: usize = 1;
-const TIMER_FOCUS: usize = 2;
 const TIMER_RECLAIM: usize = 3;
 const TIMER_POMODORO: usize = 4;
 const TIMER_APPBAR: usize = 5;
-const TIMER_FULLSCREEN_CHECK: usize = 6;
+const TIMER_PORTAL: usize = 6;
+/// A new connection can pass through portal-like states while Windows probes
+/// it, so a browser only opens if the portal is still there after this delay.
+const PORTAL_SETTLE_MS: u32 = 3000;
 /// Explorer applies a reservation asynchronously; check it this long after.
 const APPBAR_CHECK_MS: u32 = 1500;
 /// Some apps (Steam) ignore a TaskbarCreated that arrives soon after another
 /// one, e.g. ours at start right after explorer's or a previous wdock's.
 /// One more broadcast a little later catches them; duplicate adds are refused.
 const RECLAIM_DELAY_MS: u32 = 5000;
-/// Windows shown by `ShowWindowAsync` need a moment before they can be activated.
-const FOCUS_DELAY_MS: u32 = 60;
 const REBUILD_DEBOUNCE_MS: u32 = 250;
 const HSHELL_WINDOWACTIVATED: usize = 4;
 const HSHELL_RUDEAPPACTIVATED: usize = 0x8004;
@@ -98,7 +103,6 @@ static SHELLHOOK_MSG: AtomicU32 = AtomicU32::new(0);
 static TASKBAR_CREATED_MSG: AtomicU32 = AtomicU32::new(0);
 
 thread_local! {
-    static PENDING_FOCUS: Cell<Option<HWND>> = const { Cell::new(None) };
     /// Explorer's taskbar we last saw; a new one means explorer restarted.
     static EXPLORER_TASKBAR: Cell<Option<HWND>> = const { Cell::new(None) };
 }
@@ -132,6 +136,11 @@ pub fn reload_config() {
     post_main(WM_APP_CONFIG);
 }
 
+/// Rebuilds everything wdock put on screen, for when it misbehaves.
+pub fn reload() {
+    post_main(WM_APP_RELOAD);
+}
+
 /// Applies island appearance and tab order without rebuilding the AppBars.
 pub fn reload_island_appearance() {
     post_main(WM_APP_ISLAND_APPEARANCE);
@@ -156,12 +165,6 @@ pub fn schedule_pomodoro(delay_ms: Option<u32>) {
             let _ = KillTimer(Some(hwnd), TIMER_POMODORO);
         },
     }
-}
-
-/// Activates `hwnd` shortly, once an asynchronous show has completed.
-pub fn focus_later(hwnd: HWND) {
-    PENDING_FOCUS.set(Some(hwnd));
-    unsafe { SetTimer(Some(main_hwnd()), TIMER_FOCUS, FOCUS_DELAY_MS, None) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,7 +210,9 @@ fn with_shell(f: impl FnOnce(&mut Shell)) {
 impl Shell {
     fn rebuild(&mut self) {
         self.destroy_bars();
+        crate::ui::text::set_ui_font(&self.config.appearance.font);
         island::configure(&self.config.island);
+        self.configure_clipboard();
         if std::mem::take(&mut self.pending_device_lost) {
             self.gfx = None;
         }
@@ -292,8 +297,8 @@ impl Shell {
         // leaving full screen is announced by the shell hook and the AppBar
         // notification instead.
         winevents::watch_process(if monitor.is_some() { 0 } else { wininfo::process_id(foreground) });
+        clipboard::suspend(main_hwnd(), monitor.is_some());
         if monitor == self.fullscreen {
-            if monitor.is_none() { unsafe { let _ = KillTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK); } }
             return;
         }
         match monitor {
@@ -307,10 +312,6 @@ impl Shell {
             }
         }
         self.fullscreen = monitor;
-        unsafe {
-            if monitor.is_some() { SetTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK, 1000, None); }
-            else { let _ = KillTimer(Some(main_hwnd()), TIMER_FULLSCREEN_CHECK); }
-        }
         popup::set_game_mode(monitor.is_some());
         if monitor.is_none() {
             // Explorer gives the strip back once the full-screen app is gone.
@@ -375,6 +376,16 @@ impl Shell {
         popup::notify_foreground_changed();
     }
 
+    fn configure_clipboard(&self) {
+        if clipboard::configure(
+            main_hwnd(),
+            self.config.island.clipboard_history,
+            self.fullscreen.is_some(),
+        ) {
+            popup::clipboard_changed();
+        }
+    }
+
     /// Applies the saved config live. The settings panel is rebuilt with the
     /// bars (its popups are closed by `rebuild`), so it is reopened if it was open.
     fn reload_config(&mut self, hwnd: HWND) {
@@ -389,6 +400,17 @@ impl Shell {
         if let Some((anchor, scale)) = reopen {
             popup::toggle_settings(anchor, scale);
         }
+    }
+
+    /// Recreates the bars and the GPU objects from a fresh config. The state
+    /// is logged first: this is the moment something is known to be wrong.
+    fn reload(&mut self, hwnd: HWND) {
+        log::info!("reload requested; full-screen monitor: {:?}", self.fullscreen);
+        for line in self.bars.iter().filter_map(|&(bar, _)| bar::diagnostics(bar)) {
+            log::info!("{line}");
+        }
+        self.pending_device_lost = true;
+        self.reload_config(hwnd);
     }
 }
 
@@ -442,7 +464,6 @@ pub fn run(mode: Mode) -> Result<()> {
     let model = Rc::new(RefCell::new(WindowModel::new(
         &pinned,
         config.dock.icon_source_size(max_scale),
-        1,
     )));
     // Install hooks before scanning so no window slips through in between.
     let _hooks = winevents::install(hwnd);
@@ -455,6 +476,9 @@ pub fn run(mode: Mode) -> Result<()> {
     // taskbar to the top, and our tray must end up above it.
     explorer::hide_taskbar();
     services::start(hwnd);
+    if services::portal_due() {
+        unsafe { SetTimer(Some(hwnd), TIMER_PORTAL, PORTAL_SETTLE_MS, None) };
+    }
     apps_index::start(hwnd);
     if config.island.enabled {
         media::start(hwnd);
@@ -484,6 +508,7 @@ pub fn run(mode: Mode) -> Result<()> {
     }
 
     popup::set_context(None);
+    clipboard::stop(hwnd);
     services::stop();
     media::stop();
     privacy::stop();
@@ -492,7 +517,6 @@ pub fn run(mode: Mode) -> Result<()> {
         if let Some(mut shell) = shell.take() {
             shell.destroy_bars();
             island::shutdown();
-            shell.model.borrow_mut().show_all_hidden();
         }
     });
     explorer::restore_taskbar();
@@ -581,6 +605,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 
     match msg {
+        WM_CLIPBOARDUPDATE => {
+            clipboard::request_capture(hwnd);
+            LRESULT(0)
+        }
+        clipboard::WM_APP_CLIPBOARD => {
+            if clipboard::receive(hwnd) {
+                popup::clipboard_changed();
+            }
+            LRESULT(0)
+        }
         crate::platform::tray_preferences::WM_TRAY_PREFERENCES => {
             let prefs = crate::platform::tray_preferences::load();
             tray_host::with_tray(|tray| tray.set_windows_preferences(prefs));
@@ -593,7 +627,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             LRESULT(0)
         }
         WM_APP_WINEVENTS => {
+            let started = Instant::now();
             let events = winevents::drain();
+            let count = events.len();
             let moved = !events.is_empty();
             let foreground_only = moved && events.iter().all(|(event, _)| *event == EVENT_SYSTEM_FOREGROUND);
             let location_only = moved && events.iter().all(|(event, _)| *event == EVENT_OBJECT_LOCATIONCHANGE);
@@ -626,6 +662,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     }
                 }
             });
+            if started.elapsed() > SLOW_EVENTS {
+                log::warn!("{count} window event(s) held the UI thread for {:?}", started.elapsed());
+            }
             LRESULT(0)
         }
         WM_APP_TRAY => {
@@ -663,6 +702,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             if services::handle_message(wparam, lparam) {
                 with_shell(|shell| shell.notify_bars());
             }
+            if wparam.0 == services::KIND_NETWORK && services::portal_due() {
+                unsafe { SetTimer(Some(hwnd), TIMER_PORTAL, PORTAL_SETTLE_MS, None) };
+            }
             LRESULT(0)
         }
         WM_POWERBROADCAST => {
@@ -687,11 +729,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             }
             LRESULT(0)
         }
-        // Sign-out or shutdown: show workspace-hidden windows so apps asking to
-        // save their documents are visible, and put explorer's taskbar setting
-        // back so it is saved unchanged. A cancelled sign-out re-hides it.
+        // Sign-out or shutdown: put explorer's taskbar setting back so it is
+        // saved unchanged. A cancelled sign-out re-hides it.
         WM_QUERYENDSESSION => {
-            with_shell(|shell| shell.model.borrow_mut().show_all_hidden());
             explorer::restore_taskbar();
             LRESULT(1)
         }
@@ -707,18 +747,22 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             with_shell(|shell| shell.reload_config(hwnd));
             LRESULT(0)
         }
+        WM_APP_RELOAD => {
+            with_shell(|shell| shell.reload(hwnd));
+            enforce_hybrid();
+            tray_host::reclaim();
+            LRESULT(0)
+        }
         WM_APP_ISLAND_APPEARANCE => {
             with_shell(|shell| {
                 let updated = config::load().island;
                 shell.config.island.widget_order = updated.widget_order;
                 shell.config.island.style = updated.style;
                 shell.config.island.notch_width = updated.notch_width;
+                shell.config.island.clipboard_history = updated.clipboard_history;
+                shell.configure_clipboard();
                 island::refresh_appearance();
             });
-            LRESULT(0)
-        }
-        WM_TIMER if wparam.0 == TIMER_FULLSCREEN_CHECK => {
-            with_shell(Shell::update_fullscreen);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_APPBAR => {
@@ -731,16 +775,18 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             }
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == TIMER_PORTAL => {
+            let _ = unsafe { KillTimer(Some(hwnd), TIMER_PORTAL) };
+            // A browser must not take focus from a full-screen game; quick
+            // settings still offers the sign-in page.
+            if !popup::game_mode() {
+                services::open_portal();
+            }
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == TIMER_RECLAIM => {
             let _ = unsafe { KillTimer(Some(hwnd), TIMER_RECLAIM) };
             tray_host::reclaim();
-            LRESULT(0)
-        }
-        WM_TIMER if wparam.0 == TIMER_FOCUS => {
-            let _ = unsafe { KillTimer(Some(hwnd), TIMER_FOCUS) };
-            if let Some(target) = PENDING_FOCUS.take() {
-                wininfo::activate(target);
-            }
             LRESULT(0)
         }
         WM_APP_REBUILD => {
@@ -759,6 +805,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             LRESULT(0)
         }
         WM_DESTROY => {
+            clipboard::stop(hwnd);
             unregister_hotkeys(hwnd);
             let _ = unsafe { DeregisterShellHookWindow(hwnd) };
             unsafe { PostQuitMessage(0) };

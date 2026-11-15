@@ -16,7 +16,7 @@ use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::{ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, SW_HIDE, SW_SHOWNA, ShowWindow,
+    FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, SW_HIDE, SW_SHOWNA, ShowWindow, ShowWindowAsync,
 };
 use windows::core::{PCWSTR, w};
 
@@ -98,8 +98,9 @@ pub fn hide_taskbar() -> bool {
     }
     for taskbar in taskbars() {
         if unsafe { IsWindowVisible(taskbar) }.as_bool() {
+            // Async: this runs on the UI thread, and a busy explorer must not stall it.
             unsafe {
-                let _ = ShowWindow(taskbar, SW_HIDE);
+                let _ = ShowWindowAsync(taskbar, SW_HIDE);
             }
         }
     }
