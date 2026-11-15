@@ -256,7 +256,9 @@ pub fn create(gfx: Rc<Gfx>, theme: Rc<Theme>, spec: BarSpec, view: Box<dyn View>
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         }
     }
-    crate::platform::virtual_desktops::pin_window(hwnd);
+    // No virtual-desktop pinning: tool windows have no application view, so
+    // they already show on every desktop, and pinning them only failed with
+    // WindowNotFound after a cross-process call on every popup.
     Ok(hwnd)
 }
 

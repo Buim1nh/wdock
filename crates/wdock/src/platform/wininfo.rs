@@ -3,17 +3,19 @@
 
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::{CloseHandle, HWND, POINT, RECT};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
 use windows::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Threading::{
-    GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcessId, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess,
 };
-use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegGetValueW, RRF_RT_REG_DWORD};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GA_ROOT, GA_ROOTOWNER, GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
@@ -105,21 +107,13 @@ pub fn content_process_id(hwnd: HWND) -> u32 {
     process_id(hwnd)
 }
 
-/// Mirrors Windows' taskbar End task toggle; a missing setting is disabled.
-pub fn end_task_enabled() -> bool {
-    let mut value = 0u32;
-    let mut size = size_of::<u32>() as u32;
-    unsafe { RegGetValueW(HKEY_CURRENT_USER,
-        w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings"),
-        w!("TaskbarEndTask"), RRF_RT_REG_DWORD, None, Some((&raw mut value).cast()), Some(&mut size)).is_ok() && value != 0 }
-}
-
 fn explorer_image(path: &str) -> bool {
     path.rsplit(['\\', '/']).next().is_some_and(|name| name.eq_ignore_ascii_case("explorer.exe"))
 }
 
-/// Close the most recently used Explorer window, and terminate other captured processes.
-/// Never terminate an unidentified process: it could be the Windows shell.
+/// Close the most recently used Explorer window, and terminate other captured
+/// processes with every process they started (Electron helpers, background
+/// workers). Never terminate an unidentified process: it could be the Windows shell.
 pub fn end_tasks(targets: &[(HWND, u32)]) {
     let mut handled = Vec::new();
     let mut explorer_closed = false;
@@ -143,6 +137,12 @@ pub fn end_tasks(targets: &[(HWND, u32)]) {
                     if !explorer_closed { close(hwnd); explorer_closed = true; }
                 } else if content_process_id(hwnd) == pid {
                     handled.push(pid);
+                    // Children first, so none is left to restart the app.
+                    for child in descendants(pid) {
+                        if child == shell_pid || child == unsafe { GetCurrentProcessId() } || handled.contains(&child) { continue; }
+                        handled.push(child);
+                        terminate_child(child);
+                    }
                     if let Err(error) = unsafe { TerminateProcess(handle, 1) } { log::warn!("could not end task {pid}: {error}"); }
                 }
                 let _ = unsafe { CloseHandle(handle) };
@@ -152,9 +152,90 @@ pub fn end_tasks(targets: &[(HWND, u32)]) {
     }
 }
 
+fn created(process: HANDLE) -> Option<u64> {
+    let (mut created, mut exited, mut kernel, mut user) = Default::default();
+    unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) }.ok()?;
+    Some(u64::from(created.dwHighDateTime) << 32 | u64::from(created.dwLowDateTime))
+}
+
+/// (pid, parent pid) of every running process.
+fn process_table() -> Vec<(u32, u32)> {
+    let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else { return Vec::new() };
+    let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+    let mut table = Vec::new();
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok();
+    while more {
+        table.push((entry.th32ProcessID, entry.th32ParentProcessID));
+        more = unsafe { Process32NextW(snapshot, &mut entry) }.is_ok();
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    table
+}
+
+/// Every process started, directly or not, by `root`, deepest first.
+fn descendants(root: u32) -> Vec<u32> {
+    let table = process_table();
+    let started = |pid: u32| unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok().and_then(|h| {
+        let time = created(h);
+        let _ = unsafe { CloseHandle(h) };
+        time
+    });
+    let mut found = Vec::new();
+    let mut parents = vec![(root, started(root))];
+    while let Some((parent, parent_started)) = parents.pop() {
+        for &(pid, ppid) in &table {
+            if ppid != parent || pid == root || found.contains(&pid) { continue; }
+            // A parent id can be a reused id of a process that already exited:
+            // a real child never starts before its parent.
+            let pid_started = started(pid);
+            if parent_started.zip(pid_started).is_some_and(|(p, c)| c < p) { continue; }
+            found.push(pid);
+            parents.push((pid, pid_started));
+        }
+    }
+    found.reverse();
+    found
+}
+
+fn terminate_child(pid: u32) {
+    match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, false, pid) } {
+        Ok(handle) => {
+            let mut path = [0u16; 1024];
+            let mut len = path.len() as u32;
+            let image = unsafe { QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(path.as_mut_ptr()), &mut len) };
+            if image.is_ok_and(|()| !explorer_image(&String::from_utf16_lossy(&path[..len as usize])))
+                && let Err(error) = unsafe { TerminateProcess(handle, 1) } {
+                    log::warn!("could not end child task {pid}: {error}");
+                }
+            let _ = unsafe { CloseHandle(handle) };
+        }
+        Err(error) => log::debug!("could not open child task {pid}: {error}"),
+    }
+}
+
 #[cfg(test)]
 mod end_task_tests {
     use super::explorer_image;
+
+    #[test]
+    fn descendants_cover_the_whole_tree_and_end_with_it() {
+        let mut shell = std::process::Command::new("cmd").args(["/c", "ping -n 30 127.0.0.1 >nul"]).spawn().unwrap();
+        let root = shell.id();
+        let mut tree = Vec::new();
+        for _ in 0..50 {
+            tree = super::descendants(root);
+            if !tree.is_empty() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(!tree.is_empty(), "ping was not found under cmd");
+        assert!(!tree.contains(&root) && !tree.contains(&std::process::id()));
+        for &pid in &tree { super::terminate_child(pid); }
+        let _ = shell.kill();
+        let _ = shell.wait();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let alive = super::process_table();
+        assert!(tree.iter().all(|pid| !alive.iter().any(|(p, _)| p == pid)), "a child survived");
+    }
 
     #[test]
     fn explorer_is_identified_case_insensitively_for_any_path() {

@@ -25,7 +25,7 @@ use windows::Win32::Graphics::DirectWrite::{DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TE
 use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, KillTimer, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow,
+    GetCursorPos, GetMessagePos, KillTimer, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow,
 };
 use windows::core::Result;
 
@@ -509,9 +509,17 @@ impl Dock {
         p
     }
 
-    /// The pointer for a mouse message. The real cursor is used because the
-    /// overlay moves under it while magnifying; debug builds with
-    /// `WDOCK_TEST_INPUT` set trust the message instead, for posted test input.
+    /// Where the cursor was when the current message was posted. The overlay
+    /// moves under the cursor while magnifying, so client coordinates go stale;
+    /// the live cursor does too when the UI thread is busy, and a right-click
+    /// then hits nothing or the wrong icon.
+    fn message_pos() -> POINT {
+        let pos = unsafe { GetMessagePos() };
+        POINT { x: (pos & 0xFFFF) as i16 as i32, y: (pos >> 16) as i16 as i32 }
+    }
+
+    /// The pointer for a mouse message; debug builds with `WDOCK_TEST_INPUT`
+    /// set trust the message coordinates instead, for posted test input.
     fn test_input() -> bool {
         cfg!(debug_assertions) && std::env::var_os("WDOCK_TEST_INPUT").is_some()
     }
@@ -539,7 +547,7 @@ impl Dock {
         if Self::test_input() {
             return POINT { x: self.layout.frame.left + x as i32, y: self.layout.frame.top + y as i32 };
         }
-        Self::cursor()
+        Self::message_pos()
     }
 
     /// Pointer in overlay client pixels.
@@ -759,13 +767,13 @@ impl Dock {
             let label = if entry.windows.len() == 1 { "Close window".to_owned() } else { format!("Close {} windows", entry.windows.len()) };
             let windows = entry.windows.clone();
             items.push(MenuItem::action(label, move || windows.iter().for_each(|&w| wininfo::close(w))));
-            if wininfo::end_task_enabled() {
-                let mut targets: Vec<_> = entry.windows.iter().map(|&hwnd| (hwnd, wininfo::content_process_id(hwnd))).collect();
-                // File Explorer shares its process with the shell. The most recently
-                // used window is the only one End task should close in that case.
-                if let Some(recent) = entry.recent { targets.sort_by_key(|(hwnd, _)| *hwnd != recent); }
-                items.push(MenuItem::action("End task", move || wininfo::end_tasks(&targets)));
-            }
+            // Apps that hide to the tray on close (ChatGPT, Discord) keep
+            // running after "Close window"; this is the way to stop them.
+            let mut targets: Vec<_> = entry.windows.iter().map(|&hwnd| (hwnd, wininfo::content_process_id(hwnd))).collect();
+            // File Explorer shares its process with the shell. The most recently
+            // used window is the only one Force quit should close in that case.
+            if let Some(recent) = entry.recent { targets.sort_by_key(|(hwnd, _)| *hwnd != recent); }
+            items.push(MenuItem::action("Force quit", move || wininfo::end_tasks(&targets)));
         }
         drop(model);
         let slot = self.slot_screen(index);

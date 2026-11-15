@@ -81,7 +81,7 @@ Tất cả ảnh có độ phân giải 1920×1080.
 - App ghim và app đang chạy, có chấm dưới app đang chạy.
 - Phóng to kiểu macOS, có nhãn tên.
 - Xem trước cửa sổ trực tiếp khi rê chuột.
-- Kéo thả để sắp xếp hoặc ghim, có menu chuột phải.
+- Kéo thả để sắp xếp hoặc ghim, có menu chuột phải. **Force quit** tắt app cùng mọi tiến trình nó tạo ra, dùng cho app vẫn chạy ngầm dưới khay sau khi đóng cửa sổ.
 - Tự ẩn thông minh: dock trượt xuống khi có cửa sổ đè lên và hiện lại khi đưa chuột xuống đáy màn hình.
 
 ### Dynamic Island
